@@ -298,6 +298,26 @@ class GaussianBeam(object):
         return E
     
 
+    def E_vec(
+            self,
+            x: u.Quantity,
+            y: u.Quantity,
+            z: u.Quantity,
+    ) -> u.Quantity:
+        """Calculate the complex electric field vector of the Gaussian beam at the given position.
+        
+            Parameters:
+                x (astropy.units.Quantity): x-coordinate of the position.
+                y (astropy.units.Quantity): y-coordinate of the position.
+                z (astropy.units.Quantity): z-coordinate of the position.
+                
+            Returns:
+                astropy.units.Quantity: Complex electric field vector of the Gaussian beam at the given position.
+        """
+
+        return self.E_field_amplitude(x, y, z) * self._pol_vec
+    
+
 
     def intensity(
             self,
