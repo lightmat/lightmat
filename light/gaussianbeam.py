@@ -112,7 +112,7 @@ class GaussianBeam(object):
             I0: Union[u.Quantity, None] = None,
             E0: Union[u.Quantity, None] = None,
             w0_zpos: u.Quantity = 0*u.m,
-        ):
+        ) -> None:
         """Initialize a GaussianBeam object.
         
             Parameters:
