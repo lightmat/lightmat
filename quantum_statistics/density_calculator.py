@@ -1,19 +1,14 @@
 import numpy as np
-from scipy.integrate import simpson
-from tqdm.notebook import tqdm
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 import astropy.units as u
 from astropy.constants import hbar, k_B
 from astropy.units import Quantity
-from typing import Callable, Union, Sequence, Tuple, Dict
+from typing import Union, Sequence, Tuple, Dict
 
 from .particle_props import ParticleProps
 
 
 
-class DensityCalculater():
+class DensityCalculator():
     def __init__(
             self, 
             particle_props: Union[ParticleProps, Sequence[ParticleProps], np.ndarray], 
