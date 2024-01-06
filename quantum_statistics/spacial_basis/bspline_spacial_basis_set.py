@@ -3,9 +3,9 @@ from typing import Union, Sequence, Callable
 from astropy.units import Quantity, Unit
 import astropy.units as u
 from scipy.interpolate import BSpline
-from scipy.integrate import nquad
 import sparse
 
+from .nquad_vec import nquad_vec
 from .spacial_basis_set import SpacialBasisSet
     
 
@@ -44,124 +44,161 @@ class BSplineSpacialBasisSet(SpacialBasisSet):
 
     def eval(
         self,
-        x: Union[float, Sequence[float], np.ndarray, Quantity],
-        y: Union[float, Sequence[float], np.ndarray, Quantity],
-        z: Union[float, Sequence[float], np.ndarray, Quantity],
+        points: Union[Sequence[float], np.ndarray, Quantity],
+        return_sparse: bool = True,
     ) -> Union[np.ndarray, sparse.COO]:
-        """Evaluate all basis functions at the given position(s) and return the result as a sparse.COO
-           object of shape (N_basis_functions, len(x), len(y), len(z)).
+        """Evaluate all basis functions at the given point(s) and return the result as a sparse.COO object 
+           if `return_sparse` is True, otherwise return a dense numpy array. The shape of the result is 
+           (`N_basis_functions`, `num_points`).
            
            Args:
-               x: The x position(s) to evaluate the basis functions at in [um].
-               y: The y position(s) to evaluate the basis functions at in [um].
-               z: The z position(s) to evaluate the basis functions at in [um].
+               points: The point(s) to evaluate the basis functions at in [um].
+               return_sparse: If True return a sparse.COO object, else a dense numpy array. Defaults to True.
                
            Returns:
-               The evaluated basis functions of shape (N_basis_functions, len(x), len(y), len(z)).
+               The evaluated basis functions of shape (`N_basis_functions`, `num_points`).
         """
-        self.x = x
-        self.y = y
-        self.z = z
+        self.points = points
+        self.return_sparse = return_sparse
         self._check_and_process_input("eval") 
+        x = self.points[:, 0]
+        y = self.points[:, 1]
+        z = self.points[:, 2]
 
         # Evaluate the B-splines
-        evaluated_splines_x = sparse.COO.from_numpy(np.array([spline(self.x) for spline in self.splines_x]))
-        evaluated_splines_y = sparse.COO.from_numpy(np.array([spline(self.y) for spline in self.splines_y]))
-        evaluated_splines_z = sparse.COO.from_numpy(np.array([spline(self.z) for spline in self.splines_z]))
+        evaluated_splines_x = sparse.COO.from_numpy(np.array([spline(x) for spline in self.splines_x]))
+        evaluated_splines_y = sparse.COO.from_numpy(np.array([spline(y) for spline in self.splines_y]))
+        evaluated_splines_z = sparse.COO.from_numpy(np.array([spline(z) for spline in self.splines_z]))
 
-        # Calculate the tensor product of the evaluated splines giving shape 
-        # (num_splines_x, num_splines_y, num_splines_z, len(x), len(y), len(z))
-        tensor_product = sparse.tensordot(evaluated_splines_x, sparse.tensordot(evaluated_splines_y, \
-                                          evaluated_splines_z, axes=0), axes=0)
+        # Use broadcasting to calculate the tensor product of the evaluated splines at each point
+        # resulting in the shape (num_splines_x, num_splines_y, num_splines_z, num_points)
+        tensor_product = evaluated_splines_x[:, np.newaxis, np.newaxis, :] * \
+                         evaluated_splines_y[np.newaxis, :, np.newaxis, :] * \
+                         evaluated_splines_z[np.newaxis, np.newaxis, :, :]
+        assert tensor_product.shape == (len(evaluated_splines_x), len(evaluated_splines_y), \
+               len(evaluated_splines_z),len(self.points)), (f"tensor_product.shape = {tensor_product.shape}, "
+               f"but should be ({len(evaluated_splines_x)}, {len(evaluated_splines_y)}, "
+               f"{len(evaluated_splines_z)}, {len(self.points)})")
+        
+        # Reshape to (N_basis_functions, num_points)
+        tensor_product = tensor_product.reshape((self.N_basis_functions, len(self.points)))
 
-        # Reshape to (N_basis_functions, len(x), len(y), len(z))
-        return tensor_product.reshape((self.N_basis_functions, len(self.x), len(self.y), len(self.z)))
+        if return_sparse:
+            return tensor_product
+        else:
+            return tensor_product.todense()
     
 
     def eval_laplacian(
         self,
-        x: Union[float, Sequence[float], np.ndarray, Quantity],
-        y: Union[float, Sequence[float], np.ndarray, Quantity],
-        z: Union[float, Sequence[float], np.ndarray, Quantity],
+        points: Union[Sequence[float], np.ndarray, Quantity],
+        return_sparse: bool = True,
     ) -> Union[np.ndarray, sparse.COO]:
-        """Evaluate the Laplacian of all basis functions at the given position(s) and return the result as a sparse.COO
-           object of shape (N_basis_functions, len(x), len(y), len(z)).
+        """Evaluate all the laplacian of all basis functions at the given point(s) and return the result 
+           as a sparse.COO object if `return_sparse` is True, otherwise return a dense numpy array. 
+           The shape of the result is (`N_basis_functions`, `num_points`).
               
            Args:
-             x: The x position(s) to evaluate the basis functions at in [um].
-             y: The y position(s) to evaluate the basis functions at in [um].
-             z: The z position(s) to evaluate the basis functions at in [um].
+               points: The point(s) to evaluate the basis functions at in [um].
+               return_sparse: If True return a sparse.COO object, else a dense numpy array. Defaults to True.
                 
            Returns:
-             The evaluated Laplacian of the basis functions of shape (N_basis_functions, len(x), len(y), len(z)).
+               The evaluated laplacians of basis functions of shape (`N_basis_functions`, `num_points`).
           """
-        self.x = x
-        self.y = y
-        self.z = z
-        self._check_and_process_input("eval")
+        self.points = points
+        self.return_sparse = return_sparse
+        self._check_and_process_input("eval") 
+        x = self.points[:, 0]
+        y = self.points[:, 1]
+        z = self.points[:, 2]
 
         # Evaluate the B-splines
-        evaluated_splines_x = sparse.COO.from_numpy(np.array([spline(self.x) for spline in self.splines_x]))
-        evaluated_splines_y = sparse.COO.from_numpy(np.array([spline(self.y) for spline in self.splines_y]))
-        evaluated_splines_z = sparse.COO.from_numpy(np.array([spline(self.z) for spline in self.splines_z]))
+        evaluated_splines_x = sparse.COO.from_numpy(np.array([spline(x) for spline in self.splines_x]))
+        evaluated_splines_y = sparse.COO.from_numpy(np.array([spline(y) for spline in self.splines_y]))
+        evaluated_splines_z = sparse.COO.from_numpy(np.array([spline(z) for spline in self.splines_z]))
 
         # Evaluate the second derivatives of the B-splines
-        d2x_evaluated_splines_x = sparse.COO.from_numpy(np.array([spline.derivative(2)(self.x) for spline in self.splines_x]))
-        d2y_evaluated_splines_y = sparse.COO.from_numpy(np.array([spline.derivative(2)(self.y) for spline in self.splines_y]))
-        d2z_evaluated_splines_z = sparse.COO.from_numpy(np.array([spline.derivative(2)(self.z) for spline in self.splines_z]))
+        d2x_evaluated_splines_x = sparse.COO.from_numpy(np.array([spline.derivative(2)(x) for spline in \
+                                                                  self.splines_x]))
+        d2y_evaluated_splines_y = sparse.COO.from_numpy(np.array([spline.derivative(2)(y) for spline in \
+                                                                    self.splines_y]))
+        d2z_evaluated_splines_z = sparse.COO.from_numpy(np.array([spline.derivative(2)(z) for spline in \
+                                                                    self.splines_z]))
 
-        # Calculate the laplacian of the evaluated splines as tensor product giving the shape 
-        # (num_splines_x, num_splines_y, num_splines_z, len(x), len(y), len(z))
-        tensor_product = sparse.tensordot(d2x_evaluated_splines_x, sparse.tensordot(evaluated_splines_y, \
-                                          evaluated_splines_z, axes=0), axes=0) + \
-                         sparse.tensordot(evaluated_splines_x, sparse.tensordot(d2y_evaluated_splines_y, \
-                                          evaluated_splines_z, axes=0), axes=0) + \
-                         sparse.tensordot(evaluated_splines_x, sparse.tensordot(evaluated_splines_y, \
-                                          d2z_evaluated_splines_z, axes=0), axes=0) 
+        # Use broadcasting to calculate the laplacian of the evaluated splines as tensor productat each 
+        # point resulting in the shape (num_splines_x, num_splines_y, num_splines_z, num_points)
+        tensor_product = d2x_evaluated_splines_x[:, np.newaxis, np.newaxis, :] * \
+                            evaluated_splines_y[np.newaxis, :, np.newaxis, :] * \
+                            evaluated_splines_z[np.newaxis, np.newaxis, :, :] + \
+                         evaluated_splines_x[:, np.newaxis, np.newaxis, :] * \
+                            d2y_evaluated_splines_y[np.newaxis, :, np.newaxis, :] * \
+                            evaluated_splines_z[np.newaxis, np.newaxis, :, :] + \
+                         evaluated_splines_x[:, np.newaxis, np.newaxis, :] * \
+                            evaluated_splines_y[np.newaxis, :, np.newaxis, :] * \
+                            d2z_evaluated_splines_z[np.newaxis, np.newaxis, :, :]
+        assert tensor_product.shape == (len(evaluated_splines_x), len(evaluated_splines_y), \
+               len(evaluated_splines_z),len(self.points)), (f"tensor_product.shape = {tensor_product.shape}, "
+               f"but should be ({len(evaluated_splines_x)}, {len(evaluated_splines_y)}, "
+               f"{len(evaluated_splines_z)}, {len(self.points)})")
+        
+        # Reshape to (N_basis_functions, num_points)
+        tensor_product = tensor_product.reshape((self.N_basis_functions, len(self.points)))
 
-        # Reshape to (N_basis_functions, len(x), len(y), len(z))
-        return tensor_product.reshape((self.N_basis_functions, len(self.x), len(self.y), len(self.z)))
+        if return_sparse:
+            return tensor_product
+        else:
+            return tensor_product.todense()
 
-    
+
 
     def expand(
         self,
         coeffs: Union[float, Sequence[float], np.ndarray],
-        x: Union[float, Sequence[float], np.ndarray, Quantity],
-        y: Union[float, Sequence[float], np.ndarray, Quantity],
-        z: Union[float, Sequence[float], np.ndarray, Quantity],
+        points: Union[Sequence[float], np.ndarray, Quantity], 
+        return_sparse: bool = False,  
     ) -> Union[np.ndarray, sparse.COO]:
-        """Expand the basis functions with the given coefficients at the given position(s) and return the result as 
-           sparse.COO object of shape (len(x), len(y), len(z)).
+        """Expand the basis functions with the given coefficients at the given point(s) and return the result 
+           as a sparse.COO object if `return_sparse` is True, otherwise return a dense numpy array. 
+           The shape of the result is (`N_basis_functions`, `num_points`).
            
            Args:
-               coeffs: The coefficients to expand the basis functions with. Must be of length `N_basis_functions`.
-               x: The x position(s) to evaluate the basis functions at in [um].
-               y: The y position(s) to evaluate the basis functions at in [um].
-               z: The z position(s) to evaluate the basis functions at in [um].
+               coeffs: The coefficients to expand the basis functions with. Must be of length 
+                       `N_basis_functions`.
+               points: The point(s) to evaluate the basis functions at in [um].
+               return_sparse: If True return a sparse.COO object, else a dense numpy array. Defaults to False.
+               
                
            Returns:
-               The expansion value(s) of shape (len(x), len(y), len(z)).
+               The expansion value(s) of shape (`num_points`).
         """
         self.coeffs = coeffs
-        self.x = x
-        self.y = y
-        self.z = z
-        self._check_and_process_input("expand")        
+        self.points = points
+        self.return_sparse = return_sparse
+        self._check_and_process_input("expand") 
 
-        # Evaluate the basis functions at the given positions (shape = (N_basis_functions, len(x), len(y), len(z))
-        basis_funcs_evaluated = self.eval(self.x, self.y, self.z)
+        # Evaluate the basis functions at the given points resulting in the shape
+        # (N_basis_functions, num_points)
+        basis_funcs_evaluated = self.eval(self.points, return_sparse=True)
+        assert basis_funcs_evaluated.shape == (self.N_basis_functions, len(self.points)), \
+               (f"basis_funcs_evaluated.shape = {basis_funcs_evaluated.shape}, but should be "
+               f"({self.N_basis_functions}, {len(self.points)})")
 
-        # Reshape the coefficients to (N_basis_functions, 1, 1, 1) to be broadcastable with the basis functions
-        self.coeffs = self.coeffs.reshape((self.N_basis_functions, 1, 1, 1))
+        # Reshape the coefficients to (N_basis_functions, 1) to be broadcastable with the basis functions
+        self.coeffs = self.coeffs.reshape((self.N_basis_functions, 1))
 
-        # Do weighted sum of basis functions resulting in the shape (len(x), len(y), len(z))
-        return (self.coeffs * basis_funcs_evaluated).sum(axis=0)
+        # Do weighted sum of basis functions resulting in the shape (num_points,)
+        result = (self.coeffs * basis_funcs_evaluated).sum(axis=0)
+
+        if return_sparse:
+            return result
+        else:
+            return result.todense()
 
 
     def get_kinetic_energy_matrix(
         self,
         unit: Union[str, Unit] = u.eV,
+        return_sparse: bool = True,
     ) -> np.ndarray:
         """Return the kinetic energy matrix in terms of the basis functions, which has matrix elements
            T_ij = -hbar^2/2m int d^3r b*_i(r) nabla^2 b_j(r)
@@ -169,32 +206,39 @@ class BSplineSpacialBasisSet(SpacialBasisSet):
            
            Args:
                unit: The unit of the kinetic energy matrix. Defaults to [eV].
+               return_sparse: If True return a sparse.COO object, else a dense numpy array. Defaults to True.
                
            Returns: 
                The kinetic energy matrix of shape (`N_basis_functions`, `N_basis_functions`).
         """
-        # Vectorized integration
-        limits = (self.x_domain, self.y_domain, self.z_domain)
-        v_integral = np.vectorize(lambda f: nquad(f, limits))
+        # Define a integrand function to be used by nquad_vec()
+        def integrand(points):
+            # Evaluate basis functions and their Laplacians
+            basis_funcs = self.eval(points)  # shape: (N_basis_functions, num_points)
+            laplacians = self.eval_laplacian(points)  # Same shape as basis_funcs
 
-        # Integrate b*_i(r) nabla^2 b_j(r) over the domain
-        def integrand(x, y, z):
-            basis_funcs = self.eval(x, y, z)
-            laplacians = self.eval_laplacian(x, y, z)
+            # Calculate the tensor product resulting in the shape 
+            # (N_basis_functions, N_basis_functions, num_points)
+            tensor_product = basis_funcs[:, np.newaxis, :] * laplacians[np.newaxis, :, :]
+            assert tensor_product.shape == (self.N_basis_functions, self.N_basis_functions, len(points)), \
+            (f"tensor_product.shape = {tensor_product.shape}, but should be ({self.N_basis_functions}, "
+            f"{self.N_basis_functions}, {len(points)})")
 
-            # Reshape, so that basis_funcs has shape (N_basis_functions, 1, len(x), len(y), len(z)) and
-            # laplacians has shape (1, N_basis_functions, len(x), len(y), len(z))
-            extended_basis_funcs = sparse.COO(basis_funcs.data, basis_funcs.coords, shape=(basis_funcs.shape[0], 1, *basis_funcs.shape[1:]))
-            extended_laplacians = sparse.COO(laplacians.data, laplacians.coords, shape=(1, *laplacians.shape))
+            ## Reshape to 2D array (num_points, N_basis_functions**2) as required by cubature
+            #return tensor_product.reshape((self.N_basis_functions**2, len(points))).T
+            nz_elements = tensor_product.data
+            self.nz_indices = tensor_product.coords # we need these later to reconstruct the matrix
 
-            # Perform element-wise multiplication, utilizing broadcasting
-            # Result shape: (N_basis_funcs, N_basis_funcs, len(x), len(y), len(z))
-            return extended_basis_funcs * extended_laplacians
-        
-        # Integrate over the domain
-        integral = v_integral(integrand)
+            return nz_elements
 
-        return integral
+
+        # Define integration bounds
+        xmin = np.array([self.x_domain[0], self.y_domain[0], self.z_domain[0]])
+        xmax = np.array([self.x_domain[1], self.y_domain[1], self.z_domain[1]])
+
+        return integrand
+
+
 
 
 
@@ -365,56 +409,44 @@ class BSplineSpacialBasisSet(SpacialBasisSet):
 
 
 
-        if  which_method == "eval":
-            # Check x, y, and z
-            if isinstance(self.x, Quantity):
-                self.x = self.x.to(u.um).value
-            if isinstance(self.x, (float, int)):
-                self.x = np.atleast_1d(self.x)
-            elif isinstance(self.x, (Sequence, np.ndarray)):
-                if all(isinstance(x_i, (float, int)) for x_i in self.x):
-                    self.x = np.asarray(self.x)
+        if  which_method == "eval" or which_method == "expand":
+            # Check points
+            if isinstance(self.points, Quantity) and self.points.unit.is_equivalent(u.um):
+                self.points = self.points.to(u.um).value
+            if isinstance(self.points, np.ndarray):
+                if len(self.points.shape) == 1 and  self.points.shape[0] == 3 and \
+                    all(isinstance(p, (float, int)) for p in self.points):
+                    self.points = np.atleast_2d(self.points)
+                elif len(self.points.shape) == 2 and self.points.shape[1] == 3 and \
+                      all(isinstance(p, (float, int)) for p in self.points.flatten()):
+                    pass
                 else:
-                    raise TypeError("x must be float or sequence of floats.")
+                    raise ValueError("points must be a 1D or 2D array of shape (3,) or (N, 3).")
+            elif isinstance(self.points, Sequence):
+                if len(self.points) == 3 and all(isinstance(p, (float, int)) for p in self.points):
+                    self.points = np.atleast_2d(self.points)
+                elif all(len(p) == 3 and all(isinstance(p_i, (float, int)) for p_i in p) for p in self.points):
+                    self.points = np.array(self.points)
+                else:
+                    raise ValueError("points must be a sequence of length 3 or a sequence of sequences of length 3.")
             else:
-                raise TypeError("x must be float or sequence of floats.")
+                raise TypeError("points must be a sequence or a numpy array.")
             
-            if isinstance(self.y, Quantity):
-                self.y = self.y.to(u.um).value
-            if isinstance(self.y, (float, int)):
-                self.y = np.atleast_1d(self.y)
-            elif isinstance(self.y, (Sequence, np.ndarray)):
-                if all(isinstance(y_i, (float, int)) for y_i in self.y):
-                    self.y = np.asarray(self.y)
-                else:
-                    raise TypeError("y must be float or sequence of floats.")
-            else:
-                raise TypeError("y must be float or sequence of floats.")
-
-            if isinstance(self.z, Quantity):
-                self.z = self.z.to(u.um).value
-            if isinstance(self.z, (float, int)):
-                self.z = np.atleast_1d(self.z)
-            elif isinstance(self.z, (Sequence, np.ndarray)):
-                if all(isinstance(z_i, (float, int)) for z_i in self.z):
-                    self.z = np.asarray(self.z)
-                else:
-                    raise TypeError("z must be float or sequence of floats.")
-            else:
-                raise TypeError("z must be float or sequence of floats.")
+            # Check return_sparse
+            if not isinstance(self.return_sparse, bool):
+                raise TypeError("return_sparse must be a bool.")
+                      
             
-
-
-        if which_method == "expand":
-            #Check coeffs
-            if isinstance(self.coeffs, (float, int)):
-                self.coeffs = np.atleast_1d(self.coeffs)
-            elif isinstance(self.coeffs, (Sequence, np.ndarray)):
-                if all(isinstance(c, (float, int)) for c in self.coeffs):
-                    self.coeffs = np.asarray(self.coeffs)
-            else:
-                raise TypeError("self.coeffs must be a float or a sequence of floats.")
-            if self.coeffs.shape[0] != self.N_basis_functions:
-                raise ValueError(f"Length of self.coeffs ({self.coeffs.shape[0]}) does not match number of basis functions \
-                                ({self.N_basis_functions}).")
+            if which_method == "expand":
+                #Check coeffs
+                if isinstance(self.coeffs, (float, int)):
+                    self.coeffs = np.atleast_1d(self.coeffs)
+                elif isinstance(self.coeffs, (Sequence, np.ndarray)):
+                    if all(isinstance(c, (float, int)) for c in self.coeffs):
+                        self.coeffs = np.asarray(self.coeffs)
+                else:
+                    raise TypeError("self.coeffs must be a float or a sequence of floats.")
+                if self.coeffs.shape[0] != self.N_basis_functions:
+                    raise ValueError(f"Length of self.coeffs ({self.coeffs.shape[0]}) does not match number of basis functions \
+                                    ({self.N_basis_functions}).")
        
