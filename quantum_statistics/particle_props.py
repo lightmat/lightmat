@@ -1,16 +1,38 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import astropy.units as u
 from astropy.constants import hbar, k_B
 from astropy.units import Quantity
 from typing import Callable, Union, Sequence
+import copy
 
 
 
 class ParticleProps:
+    """
+    A class representing the properties of a particle system.
+
+    This class encapsulates the properties and behaviors of a particle system in a 
+    quantum simulation context. It supports defining the mass, temperature, domain, and
+    trapping potential of particles, as well as plotting the trapping potential.
+
+    Attributes:
+        name (str): Name of the particle.
+        species (str): Type of the particle, either 'fermion' or 'boson'.
+        m (Quantity or float): Mass of the particle, in kilograms.
+        N_particles (int): Number of particles in the system.
+        T (Quantity or float): Temperature of the system, in nanoKelvins.
+        domain (Sequence, np.ndarray, or Quantity): Spatial domain of the system.
+        a_s (Quantity or float, optional): s-wave scattering length of the particles.
+        g (Quantity): Contact interaction strength calculated from a_s.
+
+    Methods:
+        V_trap(x,y,z): Returns the trapping potential of the system at given position(s).
+        plot_V_trap(x,y,z): Plots the trapping potential of the system at given position(s).
+    """
     def __init__(
             self, 
-            name: str,
             species: str, 
             m: Union[float, Quantity], 
             N_particles: int, 
@@ -18,8 +40,25 @@ class ParticleProps:
             domain: Union[Sequence[float], Sequence[Sequence[float]], np.ndarray, Quantity],
             V_trap: Union[Callable, np.ndarray, Quantity], 
             a_s: Union[float, Quantity, None] = None,
+            name: str = "Particle",
             **V_trap_kwargs,
         ):
+        """Initializes the ParticleProps class.
+        
+           Args:
+               species (str): Type of the particle, either 'fermion' or 'boson'.
+               m (Quantity or float): Mass of the particle, in [kg].
+               N_particles (int): Number of particles in the system.
+               T (Quantity or float): Temperature of the system, in [nK].
+               domain (Sequence, np.ndarray, or Quantity): Spatial domain of the system. Either a sequence of length 2
+                                                           containing the same x,y,z domain, or a sequence of length 3
+                                                           containing sequences of length 2 containing the x,y,z domain
+                                                           in [um].
+               V_trap (Callable): Function that returns the trapping potential of the system at given position(s).
+               a_s (Quantity or float, optional): s-wave scattering length of the particles in [m].
+               name (str): Name of the particle.
+               **V_trap_kwargs: Keyword arguments to pass to V_trap.
+        """
         #Name
         if isinstance(name, str):
             self.name = name
@@ -123,112 +162,176 @@ class ParticleProps:
 
     def V_trap(self, *args):
         """
-        This is a placeholder docstring. It will be replaced by the docstring of V_trap.
+        Calculates the trap potential at given position(s).
+
+        This method acts as a wrapper around the trap potential function ('V_trap') 
+        passed during instantiation. 
+
+        Parameters:
+            *args: Variable length argument list representing position(s).
+
+        Returns:
+            The value of the trap potential at the given position(s).
         """
         return self._V_trap(*args, **self._V_trap_kwargs)
+    
+
+    def print_props(self,):
+        """Prints the properties of the particle system."""
+        print(f"Name: {self.name}")
+        print(f"Species: {self.species}")
+        print(f"Mass: {self.m}")
+        print(f"Number of particles: {self.N_particles}")
+        print(f"Temperature: {self.T}")
+        print(f"Domain: {self.domain}")
+        if self.a_s is not None:
+            print(f"s-wave scattering length: {self.a_s}")
+        if self.g is not None:
+            print(f"Contact interaction strength: {self.g}")
+        print(f"Trap potential: {self._V_trap.__name__}")
 
 
     def plot_V_trap(
-        self,
-        x: Union[float, Sequence[float], np.ndarray, Quantity], 
-        y: Union[float, Sequence[float], np.ndarray, Quantity],
-        z: Union[float, Sequence[float], np.ndarray, Quantity],
-    ):
-        # Check input
-        if isinstance(x, Quantity) and x.unit.is_equivalent(u.um):
-            x = x.to(u.um).value
-        if isinstance(x, (float, int)):
-            x = np.array([x])
-        elif isinstance(x, (Sequence, np.ndarray)):
-            x = np.array(x)
-        else:
-            raise TypeError("x must be a float, int, Sequence, or Quantity.")
-
-        if isinstance(y, Quantity) and y.unit.is_equivalent(u.um):
-            y = y.to(u.um).value
-        if isinstance(y, (float, int)):
-            y = np.array([y])
-        elif isinstance(y, (Sequence, np.ndarray)):
-            y = np.array(y)
-        else:
-            raise TypeError("y must be a float, int, Sequence, or Quantity.")
-        
-        if isinstance(z, Quantity) and z.unit.is_equivalent(u.um):
-            z = z.to(u.um).value
-        if isinstance(z, (float, int)):
-            z = np.array([z])
-        elif isinstance(z, (Sequence, np.ndarray)):
-            z = np.array(z)
-        else:
-            raise TypeError("z must be a float, int, Sequence, or Quantity.")
-
-        plot_dim = sum(len(arr) > 1 for arr in [x, y, z])
-        if plot_dim == 0:
-            raise ValueError("At least one of x, y, or z must be a sequence of length > 1.")
-        elif plot_dim == 1:
-            self._plot_1d(x, y, z)
-        elif plot_dim == 2:
-            self._plot_2d(x, y, z)
-        elif plot_dim == 3:
-            raise ValueError("Cannot plot a 3D function, at least one of x,y,z have to be a number, not a sequence.")      
-        
-
-    def _plot_1d(
-        self,
-        x, 
-        y,
-        z,
-    ):
-        fig, ax = plt.subplots(figsize=(8, 6))
-        fig.suptitle("Trap potential of " + self.name, fontsize=22)
-        ax.grid(True)
-        if len(x) > 1:
-            ax.plot(x, self.V_trap(x, y, z))
-            ax.set_xlabel(r"$x \; [\mu m]$", fontsize=18)
-            ax.set_ylabel(r"$V_{trap}$(x, " + str(y[0]) + ", " + str(z[0]) + r") $[nK]$", fontsize=18)
-        elif len(y) > 1:
-            ax.plot(y, self.V_trap(x, y, z))
-            ax.set_xlabel(r"$y \; [\mu m]$", fontsize=18)
-            ax.set_ylabel(r"$V_{trap}$(" + str(x[0]) + ", y, " + str(z[0]) + r") $[nK]$", fontsize=18)
-        elif len(z) > 1:
-            ax.plot(z, self.V_trap(x, y, z))
-            ax.set_xlabel(r"$z \; [\mu m]$", fontsize=18)
-            ax.set_ylabel(r"$V_{trap}$(" + str(x[0]) + ", " + str(y[0]) + ", z)" + r" $[nK]$", fontsize=18)
-
-        plt.show()
-
-
-    def _plot_2d(
-            self,
-            x,
-            y,
-            z,
+            self, 
+            which: str = "all",
         ):
+        """Plots the trap potential of the system.
+        
+           Args:
+               which (str): Which variable to plot the trap potential as a function of. Must be one of 'all',
+               'all1d', 'all2d', 'x', 'y', 'z', 'xy', 'xz', or 'yz'. Defaults to 'all'.
+        """
+        if which not in ['all', 'all1d', 'all2d', 'x', 'y', 'z', 'xy', 'xz', 'yz']:
+            raise ValueError("which must be one of 'all', 'all1d', 'all2d', 'x', 'y', 'z', 'xy', 'xz', or 'yz'.")
+
+        if which in ['all', 'all1d', 'all2d']:
+            if which == 'all1d':
+                settings = ['x', 'y', 'z']
+                nrows, ncols = 1, 3
+                figsize = (15, 5)  # Wider figure for 1D plots
+                titles = ['Along X', 'Along Y', 'Along Z']
+            elif which == 'all2d':
+                settings = ['xy', 'xz', 'yz']
+                nrows, ncols = 1, 3
+                figsize = (15, 5)  # Wider figure for 2D plots
+                titles = ['XY Plane', 'XZ Plane', 'YZ Plane']
+            elif which == 'all':
+                settings = ['x', 'y', 'z', 'xy', 'xz', 'yz']
+                nrows, ncols = 2, 3
+                figsize = (15, 10)  # Larger figure for both 1D and 2D plots
+                titles = ['Along X', 'Along Y', 'Along Z', 'XY Plane', 'XZ Plane', 'YZ Plane']
+
+            fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
+            fig.suptitle("Trap potential of " + self.name, fontsize=22)
+
+            for ax, setting, title in zip(axs.flatten(), settings, titles):
+                ax.set_title(title, fontsize=18)
+                if len(setting) == 1:
+                    self._plot_1d(fig, ax, setting)
+                elif len(setting) == 2:
+                    self._plot_2d(fig, ax, setting)
+
+            plt.tight_layout()
+            plt.show()
+
+        else:
+            if len(which) == 1:
+                self._plot_1d(None, None, which)
+            elif len(which) == 2:
+                self._plot_2d(None, None, which)
+
+
+    def _plot_1d(self, fig, ax, which):
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            fig.suptitle("Trap potential of " + self.name, fontsize=22)
+
+        # Implementation of 1D plot for 'x', 'y', or 'z'
+        domain = self.domain.to(u.um).value
+        if which == "x":
+            x = np.linspace(domain[0,0], domain[0,1], 1000) 
+            y = np.array([0]) 
+            z = np.array([0]) 
+        elif which == "y":
+            x = np.array([0]) 
+            y = np.linspace(domain[1,0], domain[1,1], 1000) 
+            z = np.array([0]) 
+        elif which == "z":
+            x = np.array([0]) 
+            y = np.array([0]) 
+            z = np.linspace(domain[2,0], domain[2,1], 1000)
+
+        V_trap_result = self.V_trap(x, y, z)
+        if isinstance(V_trap_result, Quantity):
+            V_trap_result = V_trap_result.to(u.nK).value
+
+        if which == "x":
+            ax.plot(x, V_trap_result)
+            ax.set_xlabel(r"$x \; [\mu m]$", fontsize=18)
+            ax.set_ylabel(r"$V_{trap}(x, 0, 0) \; [nK]$", fontsize=18)
+        elif which == "y":
+            ax.plot(y, V_trap_result)
+            ax.set_xlabel(r"$y \; [\mu m]$", fontsize=18)
+            ax.set_ylabel(r"$V_{trap}(0, y, 0) \; [nK]$", fontsize=18)
+        elif which == "z":
+            ax.plot(z, V_trap_result)
+            ax.set_xlabel(r"$z \; [\mu m]$", fontsize=18)
+            ax.set_ylabel(r"$V_{trap}(0, 0, z) \; [nK]$", fontsize=18)
+
+        ax.grid(True)
+
+    def _plot_2d(self, fig, ax, which):
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            fig.suptitle("Trap potential of " + self.name, fontsize=22)
+
+        # Implementation of 2D plot for 'xy', 'xz', or 'yz'
+        domain = self.domain.to(u.um).value
+        if which == "xy":
+            x = np.linspace(domain[0,0], domain[0,1], 1000) 
+            y = np.linspace(domain[1,0], domain[1,1], 1000) 
+            z = np.array([0])
+        elif which == "xz":
+            x = np.linspace(domain[0,0], domain[0,1], 1000) 
+            y = np.array([0])
+            z = np.linspace(domain[2,0], domain[2,1], 1000)
+        elif which == "yz":
+            x = np.array([0])
+            y = np.linspace(domain[1,0], domain[1,1], 1000) 
+            z = np.linspace(domain[2,0], domain[2,1], 1000)
+
         X, Y, Z = np.meshgrid(x, y, z, indexing="ij")
-        # Assuming V_trap returns an array of shape (len(x), len(y), len(z))
         V_trap_result = self.V_trap(X, Y, Z)
         if isinstance(V_trap_result, Quantity):
             V_trap_result = V_trap_result.to(u.nK).value
 
-        fig, ax = plt.subplots(figsize=(8, 6))
-        fig.suptitle("Trap potential of " + self.name, fontsize=22)
         im = None
-        if len(x) > 1 and len(y) > 1:
-            im = ax.imshow(V_trap_result[:, :, 0], extent=[x[0], x[-1], y[0], y[-1]])
+        if which == "xy":
+            im = ax.imshow(V_trap_result[:, :, 0], extent=[x[0], x[-1], y[0], y[-1]], origin='lower')
             ax.set_xlabel(r"$x \; [\mu m]$", fontsize=18)
             ax.set_ylabel(r"$y \; [\mu m]$", fontsize=18)
-        elif len(x) > 1 and len(z) > 1:
-            im = ax.imshow(V_trap_result[:, 0, :], extent=[x[0], x[-1], z[0], z[-1]])
+        elif which == "xz":
+            im = ax.imshow(V_trap_result[:, 0, :], extent=[x[0], x[-1], z[0], z[-1]], origin='lower')
             ax.set_xlabel(r"$x \; [\mu m]$", fontsize=18)
             ax.set_ylabel(r"$z \; [\mu m]$", fontsize=18)
-        elif len(y) > 1 and len(z) > 1:
-            im = ax.imshow(V_trap_result[0, :, :], extent=[y[0], y[-1], z[0], z[-1]])
+        elif which == "yz":
+            im = ax.imshow(V_trap_result[0, :, :], extent=[y[0], y[-1], z[0], z[-1]], origin='lower')
             ax.set_xlabel(r"$y \; [\mu m]$", fontsize=18)
             ax.set_ylabel(r"$z \; [\mu m]$", fontsize=18)
 
-        # Add a colorbar with a label
         if im is not None:
-            cbar = fig.colorbar(im, ax=ax)
-            cbar.set_label(r'$V_{\mathrm{trap}}$ [nK]', fontsize=18)
+            # Create an axis for the colorbar
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            
+            cbar = fig.colorbar(im, cax=cax)
+            cbar.set_label(r'$V_{\mathrm{trap}} \; [nK]$', fontsize=18)
 
-        plt.show()
+
+    def copy(self):
+        """Create a shallow copy of the ParticleProps instance."""
+        return copy.copy(self)
+
+    def deepcopy(self):
+        """Create a deep copy of the ParticleProps instance."""
+        return copy.deepcopy(self)

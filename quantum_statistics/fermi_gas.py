@@ -11,19 +11,17 @@ from typing import Callable, Union, Sequence
 
 from .particle_props import ParticleProps
 
-class BEC:
+class FermiGas:
     """
-    The BEC (Bose-Einstein Condensate) class is designed to model and analyze the properties of a Bose-Einstein 
-    condensate. It allows for the calculation of the spacial density of weakly interacting bosons at low temperatures
-    by iteratively updating the condensed density (either with Thomas Fermi approximation or by solving the 
-    generalized Gross-Pitaevskii equation) and the thermal density (either with a semiclassical Hartree Fock or 
-    semiclassical Popov approximation). It also fixes the chemical potential to ensure the normalization to a 
-    specific particle number.
+    The FermiGas class is designed to model and analyze the properties of a Fermi Gas. It allows for the 
+    calculation of the spacial density of weakly interacting fermions at low temperatures by solving the 
+    single-particle eigenvalue problem and applies the Fermi-Dirac distribution. It also fixes the chemical 
+    potential to ensure the normalization to a specific particle number.
 
     Attributes:
         particle_props (ParticleProps): Instance of ParticleProps class containing all relevant particle properties
-                                        such as `species`, `m`, `N_particles`, `T`, `domain`, `a_s` and `g` as well
-                                        as a wrapper method to call the `V_trap` potential.
+                                        such as `species`, `m`, `N_particles`, `T`, and `domain`as well as a wrapper 
+                                        method to call the `V_trap` potential.
         num_grid_points (tuple): Number of grid points in each spatial dimension.
         x, y, z (Quantity): 1D arrays containing the spatial grid points along each direction within the `domain` in [um].
         dx, dy, dz (Quantity): Spacing between grid points along each direction in [um].
@@ -42,15 +40,7 @@ class BEC:
 
 
     Methods:
-        eval_density(self, ...): Run the iterative procedure to update densities and find chemical potential.
-        _update_n0_with_TF_approximation(self): Apply the Thomas-Fermi approximation to update the condensed density.
-        _update_n0_by_solving_generalized_GPE(self): Solve the generalized GPE to update the condensed density. (Not implemented yet)
-        _update_n_ex(self, ...): Apply semiclassical approximations to update the non-condensed density.
-        _integrand_HF(self, ...): Calculate the integrand for the semiclassical Hartree-Fock approximation.
-        _integrand_Popov(self, ...): Calculate the integrand for the semiclassical Popov approximation.
-        plot_convergence_history(self, ...): Plot the convergence history of the iterative density evaluation procedure.
-        plot_density_1d(self, ...): Plot the spatial density along each direction in 1D.
-        plot_density_2d(self, ...): Plot the spatial density along two directions in 2D.
+
 
     Note:
         The class uses units from the `astropy.units` module for physical quantities.
@@ -65,11 +55,10 @@ class BEC:
             domain: Union[Sequence[float], Sequence[Sequence[float]], np.ndarray, Quantity] = None,
             num_grid_points: Union[int, Sequence[int], np.ndarray] = [101, 101, 101],
             V_trap: Union[Callable, np.ndarray, Quantity] = None, 
-            a_s: Union[float, Quantity, None] = None,
             init_with_zero_T: bool = True,
             **V_trap_kwargs,
         ):
-        """Initialize BEC class. Make sure to use the correct units as specified below!!! If you are 
+        """Initialize FermiGas class. Make sure to use the correct units as specified below!!! If you are 
            using astropy units, you can use units that are equilvalent to the ones specified below.
         
            Args:
@@ -89,7 +78,6 @@ class BEC:
                                                                in each dimension, or a single integer specifying the same
                                                                number of grid points in each dimension.
                V_trap (Callable): Function that returns the trapping potential of the system at given position(s).
-               a_s (Quantity or float, optional): s-wave scattering length of the particles in [m].
                name (str): Name of the particle.
                **V_trap_kwargs: Keyword arguments to pass to V_trap.
         """
@@ -98,17 +86,16 @@ class BEC:
             self.particle_props = particle_props
         else:
             # Check if all required parameters are provided
-            if None in [m, a_s, N_particles, T, domain, V_trap]:
+            if None in [m, N_particles, T, domain, V_trap]:
                 raise ValueError("All parameters must be provided if not using a ParticleProps instance.")
             self.particle_props = ParticleProps(
-                name="BEC Particle",
-                species="boson",
+                name="FermiGas Particle",
+                species="fermion",
                 m=m,
                 N_particles=N_particles,
                 T=T,
                 domain=domain,
                 V_trap=V_trap,
-                a_s=a_s,
                 **V_trap_kwargs,
             )
 
@@ -139,41 +126,28 @@ class BEC:
         else:
             self.V_trap_array *= u.nK
         
-        # Initilize the chemical potential using the TF approximation. In principle this would give:
-        # mu(r) = V(r) + g*(n0(r) + 2*n_ex(r))
+        # Initilize the chemical potential using the TF approximation. In principle, this would give:
+        # mu = hbar^2 k_F(r)^2 / 2m + V_trap(r)
         # But we don't want a position-dependent mu, so as an initial guess we take:
-        self.mu = np.min(self.V_trap_array) + self.particle_props.g.value*(self.particle_props.N_particles**(1/3))*u.nK 
+        #self.mu = np.min(self.V_trap_array) + (hbar**2/(2*self.particle_props.m) / k_B).to(u.nK).value * \
+        #                                      (6*np.pi**2 * self.particle_props.N_particles / \
+        #                                      ((self.particle_props.V_trap(0,0,0)*self.dx*self.dy*self.dz)).value)**(2/3) * u.nK
+            
+        self.mu = np.average(self.V_trap_array)
 
-        # Initialize the densities and particle numbers, which get assigned meaningful values after running 
-        # eval_density()
-        self.n0_array = None
-        self.n_ex_array = None
+        # Initialize the density arrays
         self.n_array = None
         self.N_particles = None
-        self.N_particles_condensed = None
-        self.N_particles_thermal = None
-        self.condensate_fraction = None
 
-        # Run a zero-temperature calculation to improve initial guess for `mu`. If the provided temperature is 
-        # already zero, we don't run this in order to not disturb the workflow of always running eval_density() 
-        # after initializing this class.
-        if init_with_zero_T and self.particle_props.T.value > 1e-3:
-            T = self.particle_props.T
-            self.particle_props.T = 0 * u.nK 
-            self.eval_density(use_TF=True, use_Popov=False, show_progress=False)       
-            self.particle_props.T = T
-        
 
     def eval_density(
             self,
             use_TF: bool = True,
-            use_Popov: bool = False,
             max_iter: int = 1000,
             mu_convergence_threshold: float = 1e-5,
             N_convergence_threshold: float = 1e-3,
             mu_change_rate: float = 0.01,
             mu_change_rate_adjustment: int = 5,
-            num_q_values: int = 50,
             print_convergence_info_at_this_iteration: int = 0,
             show_progress: bool = True,
         ):
@@ -209,9 +183,8 @@ class BEC:
                               which convergence was reached, if False, don't use progress bar and don't print out after 
                               which iteration convergence was reached. Defaults to True.
         """
-        # Approximations
+        # Approximation
         self.use_TF = use_TF
-        self.use_Popov = use_Popov
 
         # Set up convergence history list for the plot_convergence_history() method
         self.convergence_history_mu = [self.mu.value]
@@ -220,31 +193,16 @@ class BEC:
         # Run iterative procedure to update the densities
         iterator = tqdm(range(max_iter)) if show_progress else range(max_iter)
         for iteration in iterator: 
-            # Initialize n_ex_array with zeros in first iteration
-            if iteration == 0:
-                    self.n_ex_array = np.zeros(self.num_grid_points) * 1/u.um**3
-
-            # Update condensed density n0
+            # Update density n
             if self.use_TF:
-                self._update_n0_with_TF_approximation()
+                self._update_n_with_TF_approximation()
             else:
                 raise NotImplementedError("This method is not implemented yet.")
             
-            # Update non-condensed density n_ex if T>0 (otherwise we have n_ex=0)
-            if self.particle_props.T.value > 1e-3:
-                self._update_n_ex(num_q_values) # This uses either the semiclassical HF or Popov approximation
-                                                # depending on the self.use_Popov flag.
-            
-            # Update the total density n = n0 + nex
-            self.n_array = self.n0_array + self.n_ex_array
-
-            # Update the particle numbers
+            # Update the particle number
             self.N_particles = np.sum(self.n_array) * self.dx*self.dy*self.dz
-            self.N_particles_condensed = np.sum(self.n0_array) * self.dx*self.dy*self.dz
-            self.N_particles_thermal = np.sum(self.n_ex_array) * self.dx*self.dy*self.dz
-            self.condensate_fraction = self.N_particles_condensed / self.N_particles
 
-            # Do soft update of the chemical potential mu based on normalization condition int dV (n0 + nex) = N_particles.
+            # Do soft update of the chemical potential mu based on normalization condition int dV n = N_particles.
             # This increases mu, if N_particles is too small w.r.t N_particles_target and decreases mu if N_particles is
             # too large w.r.t. N_particles_target.
             new_mu_direction = (self.particle_props.N_particles - self.N_particles) / self.particle_props.N_particles * u.nK 
@@ -260,8 +218,6 @@ class BEC:
                 if iteration % print_convergence_info_at_this_iteration == 0:
                     print(f"Iteration {iteration}:")
                     print('N: ', self.N_particles)
-                    print('N_condensed: ', self.N_particles_condensed)
-                    print('N_thermal: ', self.N_particles_thermal)
                     print('mu: ', self.mu)
                     print('delta_mu: ', delta_mu_value)
                     print('new_mu_direction: ', new_mu_direction)
@@ -289,131 +245,14 @@ class BEC:
                 if show_progress:
                     print(f"Convergence reached after {iteration} iterations.")
                 break
-                    
-
-    def _update_n0_with_TF_approximation(
-            self,
-        ):
-        """Apply the Thomas-Fermi approximation to update the condensed density `n_0_array`.
-           When μ>V(r)+2*g*nex(r), the expression for n0(r) is positive, indicating the presence of 
-           condensed particles at that location.
-           However, if μ≤V(r)+2*g*nex(r), it implies that the local chemical potential is not sufficient 
-           to support a condensate at that point due to either the external potential V(r) being too high 
-           or the interaction energy with the non-condensed particles being too significant. 
-           In this case, the density of condensed particles n0(r) should be zero, as having a negative 
-           density is physically meaningless.
-        """
-        # Calculate n0 with current chemical potential 
-        mask = self.mu > (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array)
-        self.n0_array = np.zeros_like(self.V_trap_array) 
-        self.n0_array[mask] = (self.mu - (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array))[mask] / self.particle_props.g
-        #self.n0_array = np.maximum((self.mu - (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array)) / self.particle_props.g, 0)
 
 
-    def _update_n0_by_solving_generalized_GPE(self,):
-        """Solve the generalized GPE to update the condensed density `n0_array`."""
-        raise NotImplementedError("This method is not implemented yet.")
-
-
-    def _update_n_ex(
-            self,
-            num_q_values: int = 50,
-        ):
-        """Apply the semiclassical Hartree-Fock or Popov approximation to update the non-condensed 
-           density `n_ex_array`. 
-           
-           Args:
-                num_q_values: number of integrand evaluations for the simpson rule to integrate over momentum space. 
-                              Defaults to 50.
-        """
-        # Since we are at low temperature, integrating to infinite momentum is not necessary
-        # and will only lead to numerical problems since our excited particles have very low p
-        # and numerically we can only sum over a finite set of integrand evaluations and very
-        # likely just skip the region of interest (low p) und get out 0 from the integration.
-        # Thus we set a cutoff at p_cutoff = sqrt(2*pi*m*k*T) which corresponds to the momentum
-        # scale of the thermal de Broglie wavelength (i.e. lambda_dB = h/p_cutoff).
-        p_cutoff = np.sqrt(2*np.pi*self.particle_props.m*k_B*self.particle_props.T).to(u.u*u.m/u.s) # use this momentum units to deal with numerical
-                                                                      # numbers roughly on the order ~1
-
-        # Also, for increased numerical stability, we can rescale the integral to the interval 
-        # [0,1] and integrate over the dimensionless variable q = p/p_cutoff instead of p.
-
-        q_values = np.linspace(0, 1, num_q_values) 
-        q_values = q_values[:, np.newaxis, np.newaxis, np.newaxis] # reshape to broadcast with spacial grid later 
-
-        # Integrate using Simpson's rule (I chose this over quad() because quad() only works for scalar
-        # integrands, but we have a 3d array of integrand values. So to use quad() we would need to loop
-        # over the spatial grid and call quad() for each grid point, which is very slow. Simpson() can
-        # integrate over the whole array at once in a vectorized way, which is much faster.)
-        if self.use_Popov:
-            integral = simpson(self._integrand_Popov(q_values, p_cutoff), q_values.flatten(), axis=0)
-        else:
-            integral = simpson(self._integrand_HF(q_values, p_cutoff), q_values.flatten(), axis=0)
-
-        # Update n_ex_array 
-        self.n_ex_array = np.maximum((integral*(p_cutoff.unit)**3 / (2*np.pi * hbar)**3).to(1/u.um**3), 0)
-
-
-    def _integrand_HF(
-            self, 
-            q: Union[float, np.ndarray],
-            p_cutoff: Quantity,
-        ) -> np.ndarray:
-        """Calculate the integrand in eq. 8.121 in "Bose Einstein Condensation in Dilute Gases" by C.J. Pethick 
-           and H. Smith. Eq. 8.121 is a 3d volume-integral in momentum space, but luckily only depends on the 
-           magnitude of the momentum, so we can integrate over the angles analytically giving us the required 
-           integrand as 4*pi*p^2*f(eps_p-mu). Since we rescale the integral to integrate over the dimensionless 
-           variable q = p/p_cutoff, we additionally need to multiply the integrand by p_cutoff.
-        
-           Args:
-                q: dimensionless integration variable defined as q = p/p_cutoff
-                p_cutoff: cutoff momentum for the integration
-                
-            Returns:
-                f: Integrand p_cutoff*4*pi*p^2*f(eps_p) for the integration over q in the interval [0,1]
-        """
-        p = q * p_cutoff
-
-        # Calculation of eps_p(r) in semiclassical HF approximation (eq. 8.115). Note, that even if we use 
-        # the TF approximation for n0, we still need to incorporate the kinetic energy term for the excited states!
-        eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + 2*self.particle_props.g*(self.n0_array + self.n_ex_array)
-
-        return p_cutoff.value*4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) - 1) 
-
-
-    def _integrand_Popov(
-            self, 
-            q: Union[float, np.ndarray],
-            p_cutoff: Quantity,
-        ) -> np.ndarray:
-        #TODO: Somehow make sure that there is no divion by zero... (happens if chemical potential is too high
-        #      such that eps_p becomes zero. 
-        """Calculate the integrand in eq. 8.122 in "Bose Einstein Condensation in Dilute Gases" by C.J. Pethick 
-           and H. Smith. Eq. 8.122 is a 3d volume-integral in momentum space, but luckily only depends on the 
-           magnitude of the momentum, so we can integrate over the angles analytically giving us the required 
-           integrand as 4*pi*p^2*((p^2/2m + 2gn_array + V_array -mu)/eps_p)*f(eps_p). Since we rescale the integral 
-           to integrate over the dimensionless variable q = p/p_cutoff, we additionally need to multiply the 
-           integrand by p_cutoff.
-        
-           Args:
-                q: dimensionless integration variable defined as q = p/p_cutoff
-                p_cutoff: cutoff momentum for the integration
-                
-            Returns:
-                f: Integrand p_cutoff*4*pi*p^2*((p^2/2m + 2gn_array + V_array -mu)/eps_p)*f(eps_p) for the 
-                   integration over q in the interval [0,1]
-        """
-        p = q * p_cutoff
-
-        # Calculation of eps_p(r) in semiclassical Popov approximation (eq. 8.119). Note, that even if we use 
-        # the TF approximation for n0, we still need to incorporate the kinetic energy term for the excited states!
-        eps_p = np.sqrt(np.maximum(((p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + \
-                        2*self.particle_props.g*(self.n0_array + self.n_ex_array) - self.mu)**2 - (self.particle_props.g*self.n0_array)**2, 0))
-
-        num_non_condensed = ((p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + \
-                              2*self.particle_props.g*(self.n0_array + self.n_ex_array) - self.mu) / eps_p
-        
-        return p_cutoff.value*4*np.pi*p.value**2 * num_non_condensed / (np.exp(eps_p / self.particle_props.T) - 1)
+    def _update_n_with_TF_approximation(self):
+        mask = (self.mu - self.V_trap_array) >= 0
+        self.n_array = np.zeros_like(self.V_trap_array.value)
+        self.n_array[mask] = (1/(6*np.pi**2) * ((2*self.particle_props.m/(hbar**2) * k_B) * \
+                                     (self.mu - self.V_trap_array[mask]))**(3/2)).to(1/u.um**3).value
+        self.n_array = self.n_array * 1/u.um**3
 
 
     def plot_convergence_history(
@@ -471,22 +310,16 @@ class BEC:
             fig.suptitle(title, fontsize=24)
 
             axs[0].plot(self.x, self.n_array[:, self.num_grid_points[1]//2, self.num_grid_points[2]//2], c='k', marker='o', label=r'$n_{total}$')
-            axs[0].plot(self.x, self.n0_array[:, self.num_grid_points[1]//2, self.num_grid_points[2]//2], c='b', marker='o', label=r'$n_0$')
-            axs[0].plot(self.x, self.n_ex_array[:, self.num_grid_points[1]//2, self.num_grid_points[2]//2], c='g', marker='o', label=r'$n_{ex}$')
             axs[0].set_title(r'$n(x,0,0)$', fontsize=18)
             axs[0].set_xlabel(r'$x \; \left[\mu m\right]$', fontsize=14)
             axs[0].set_ylabel(r'$n(x,0,0) \; \left[\mu m^{-3}\right]$', fontsize=14)
 
             axs[1].plot(self.y, self.n_array[self.num_grid_points[0]//2, :, self.num_grid_points[2]//2], c='k', marker='o', label=r'$n_{total}$')
-            axs[1].plot(self.y, self.n0_array[self.num_grid_points[0]//2, :, self.num_grid_points[2]//2], c='b', marker='o', label=r'$n_0$')
-            axs[1].plot(self.y, self.n_ex_array[self.num_grid_points[0]//2, :, self.num_grid_points[2]//2], c='g', marker='o', label=r'$n_{ex}$')
             axs[1].set_title(r'$n(0,y,0)$', fontsize=18)
             axs[1].set_xlabel(r'$y \; \left[\mu m\right]$', fontsize=14)
             axs[1].set_ylabel(r'$n(0,y,0) \; \left[\mu m^{-3}\right]$', fontsize=14)
 
             axs[2].plot(self.z, self.n_array[self.num_grid_points[0]//2, self.num_grid_points[1]//2, :], c='k', marker='o', label=r'$n_{total}$')
-            axs[2].plot(self.z, self.n0_array[self.num_grid_points[0]//2, self.num_grid_points[1]//2, :], c='b', marker='o', label=r'$n_0$')
-            axs[2].plot(self.z, self.n_ex_array[self.num_grid_points[0]//2, self.num_grid_points[1]//2, :], c='g', marker='o', label=r'$n_{ex}$')
             axs[2].set_title(r'$n(0,0,z)$', fontsize=18)
             axs[2].set_xlabel(r'$z \; \left[\mu m\right]$', fontsize=14)
             axs[2].set_ylabel(r'$n(0,0,z) \; \left[\mu m^{-3}\right]$', fontsize=14)
@@ -519,87 +352,51 @@ class BEC:
             print("No convergence history found. Please run eval_density() first.")
 
 
-    def plot_density_2d(
-            self, 
-            **kwargs,
-        ):
-        """Plot the spacial density n(x,y,0), n(x,0,z) and n(0,y,z) along two directions respectively."""
+    def plot_density_2d(self, **kwargs):
+        """Plot the spatial density n(x,y,0), n(x,0,z) and n(0,y,z) along two directions respectively."""
         if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
-            title = kwargs.get('title', 'Spacial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))
-            filename = kwargs.get('filename', None) 
+            title = kwargs.get('title', 'Spatial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))
+            filename = kwargs.get('filename', None)
 
             # Define the figure and GridSpec layout
-            fig = plt.figure(figsize=(17, 13))
-            gs = gridspec.GridSpec(3, 4, width_ratios=[1, 1, 1, 0.05])  # 3 columns for plots, 1 for colorbars
+            fig = plt.figure(figsize=(17, 5))  # Adjusted figure size for 1 row
+            gs = gridspec.GridSpec(1, 4, width_ratios=[1, 1, 1, 0.05])  # 3 columns for plots, 1 for colorbars
             gs.update(wspace=0.65)  # Adjust spacing if needed
 
             # Create subplots
-            axs = [[None for _ in range(3)] for _ in range(3)]
-            for i in range(3):
-                for j in range(3):
-                    axs[i][j] = plt.subplot(gs[i, j])
+            axs = [plt.subplot(gs[0, i]) for i in range(3)]
 
             fig.suptitle(title, fontsize=24, y=0.94)
 
-            im = [[None for _ in range(3)] for _ in range(3)]
+            # Plotting n(x,y,0), n(x,0,z), n(0,y,z)
+            im = []
+            im.append(axs[0].imshow(self.n_array[:, :, self.num_grid_points[2]//2].value, 
+                                    extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.y[-1].value]))
+            axs[0].set_title(r'$n(x,y,0)$', fontsize=18)
 
-            im[0][0] = axs[0][0].imshow(self.n_array[:,:,self.num_grid_points[2]//2].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.y[-1].value])
-            axs[0][0].set_title(r'$n(x,y,0)$', fontsize=18)
-            im[0][1] = axs[0][1].imshow(self.n_array[:,self.num_grid_points[1]//2,:].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value])
-            axs[0][1].set_title(r'$n(x,0,z)$', fontsize=18)
-            im[0][2] = axs[0][2].imshow(self.n_array[self.num_grid_points[0]//2,:,:].value, \
-                                        extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value])
-            axs[0][2].set_title(r'$n(0,y,z)$', fontsize=18)
+            im.append(axs[1].imshow(self.n_array[:, self.num_grid_points[1]//2, :].value, 
+                                    extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value]))
+            axs[1].set_title(r'$n(x,0,z)$', fontsize=18)
 
+            im.append(axs[2].imshow(self.n_array[self.num_grid_points[0]//2, :, :].value, 
+                                    extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value]))
+            axs[2].set_title(r'$n(0,y,z)$', fontsize=18)
 
-            im[1][0] = axs[1][0].imshow(self.n0_array[:,:,self.num_grid_points[2]//2].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.y[-1].value])
-            axs[1][0].set_title(r'$n_0(x,y,0)$', fontsize=18)
-            im[1][1] = axs[1][1].imshow(self.n0_array[:,self.num_grid_points[1]//2,:].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value])
-            axs[1][1].set_title(r'$n_0(x,0,z)$', fontsize=18)
-            im[1][2] = axs[1][2].imshow(self.n0_array[self.num_grid_points[0]//2,:,:].value, \
-                                        extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value])
-            axs[1][2].set_title(r'$n_0(0,y,z)$', fontsize=18)
+            # Set labels and colorbars for each plot
+            for i, ax in enumerate(axs):
+                ax.set_xlabel('x [μm]' if i != 2 else 'y [μm]', fontsize=12)
+                ax.set_ylabel('y [μm]' if i != 2 else 'z [μm]', fontsize=12)
 
+                divider = make_axes_locatable(ax)
+                cax = divider.append_axes("right", size="5%", pad=0.05)
+                cbar = fig.colorbar(im[i], cax=cax)
+                cbar.ax.set_title(r'$n \; \left[ \mu m^{-3} \right]$', pad=6, fontsize=12, loc='left')
 
-            im[2][0] = axs[2][0].imshow(self.n_ex_array[:,:,self.num_grid_points[2]//2].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.y[-1].value])
-            axs[2][0].set_title(r'$n_{ex}(x,y,0)$', fontsize=18)
-            im[2][1] = axs[2][1].imshow(self.n_ex_array[:,self.num_grid_points[1]//2,:].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value])
-            axs[2][1].set_title(r'$n_{ex}(x,0,z)$', fontsize=18)
-            im[2][2] = axs[2][2].imshow(self.n_ex_array[self.num_grid_points[0]//2,:,:].value, \
-                                        extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value])
-            axs[2][2].set_title(r'$n_{ex}(0,y,z)$', fontsize=18)
-
-
-            for i in range(3):
-                for j in range(3):
-                    axs[i][0].set_xlabel('x [μm]', fontsize=12)
-                    axs[i][0].set_ylabel('y [μm]', fontsize=12)
-                    axs[i][1].set_xlabel('x [μm]', fontsize=12)
-                    axs[i][1].set_ylabel('z [μm]', fontsize=12)
-                    axs[i][2].set_xlabel('y [μm]', fontsize=12)
-                    axs[i][2].set_ylabel('z [μm]', fontsize=12)
-
-                    divider = make_axes_locatable(axs[i][j])
-                    cax = divider.append_axes("right", size="5%", pad=0.05)
-                    cbar = fig.colorbar(im[i][j], cax=cax)
-                    if i == 0:
-                        cbar.ax.set_title(r'$n \; \left[ \mu m^{-3} \right]$', pad=6, fontsize=12, loc='left')
-                    if i == 1:
-                        cbar.ax.set_title(r'$n_0 \; \left[ \mu m^{-3} \right]$', pad=6, fontsize=12, loc='left')
-                    if i == 2:
-                        cbar.ax.set_title(r'$n_{ex} \; \left[ \mu m^{-3} \right]$', pad=6, fontsize=12, loc='left')
-                    
-            if filename != None:
+            if filename is not None:
                 fig.savefig(filename, dpi=300, bbox_inches='tight')
 
             return axs
-        
+
         else:
             print("No convergence history found. Please run eval_density() first.")
 
@@ -611,3 +408,4 @@ class BEC:
         a = self.plot_convergence_history()
         b = self.plot_density_1d()
         c = self.plot_density_2d()
+
