@@ -5,6 +5,7 @@ from .analyze_gas import (
                           box_trap, 
                           box_2d_harmonic_1d_trap, 
                           analyze_bec, 
+                          analyze_fermi_gas,
                           plot_condens_frac,
                         )       
 from .density_calculator import DensityCalculator
@@ -18,6 +19,7 @@ __all__ = [
     "box_trap",
     "box_2d_harmonic_1d_trap",
     "analyze_bec",
+    "analyze_fermi_gas",
     "plot_condens_frac",
     "DensityCalculator",
     "ParticleProps",

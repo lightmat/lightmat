@@ -5,6 +5,7 @@ import astropy.units as u
 from typing import Union, Sequence
 
 from .bec import BEC
+from .fermi_gas import FermiGas
 
 
 def harmonic_trap(
@@ -128,6 +129,22 @@ def analyze_bec(Ts, particle_props, mu_change_rate=0.01, init_with_zero_T=False)
         becs.append(bec)
 
     return becs
+
+
+def analyze_fermi_gas(Ts, particle_props, mu_change_rate=0.01, init_with_zero_T=False):
+    fgs = []
+    mu = None
+    for T in Ts:
+        pp = particle_props.copy()
+        pp.T = T
+        fg = FermiGas(pp, init_with_zero_T=init_with_zero_T)
+        if mu is not None:
+            fg.mu = mu # initialize mu with previous converged value
+        fg.eval_density(mu_change_rate=mu_change_rate)
+        mu = fg.mu
+        fgs.append(fg)
+
+    return fgs
 
 
 def plot_condens_frac(Ts, becs):

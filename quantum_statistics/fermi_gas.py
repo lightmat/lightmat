@@ -79,6 +79,7 @@ class FermiGas:
                                                                number of grid points in each dimension.
                V_trap (Callable): Function that returns the trapping potential of the system at given position(s).
                name (str): Name of the particle.
+               init_with_zero_T (bool): If True, run a zero-temperature calculation to improve initial guess for `mu`.
                **V_trap_kwargs: Keyword arguments to pass to V_trap.
         """
         # Initialize particle properties
@@ -129,24 +130,29 @@ class FermiGas:
         # Initilize the chemical potential using the TF approximation. In principle, this would give:
         # mu = hbar^2 k_F(r)^2 / 2m + V_trap(r)
         # But we don't want a position-dependent mu, so as an initial guess we take:
-        #self.mu = np.min(self.V_trap_array) + (hbar**2/(2*self.particle_props.m) / k_B).to(u.nK).value * \
-        #                                      (6*np.pi**2 * self.particle_props.N_particles / \
-        #                                      ((self.particle_props.V_trap(0,0,0)*self.dx*self.dy*self.dz)).value)**(2/3) * u.nK
-            
-        self.mu = np.average(self.V_trap_array)
+        self.mu = np.min(self.V_trap_array) + np.abs(np.average(self.V_trap_array))
 
         # Initialize the density arrays
         self.n_array = None
         self.N_particles = None
 
+        # Run a zero-temperature calculation to improve initial guess for `mu`. If the provided temperature is 
+        # already zero, we don't run this in order to not disturb the workflow of always running eval_density() 
+        # after initializing this class.
+        if init_with_zero_T and self.particle_props.T.value > 1e-3:
+            T = self.particle_props.T
+            self.particle_props.T = 0 * u.nK 
+            self.eval_density(use_LDA=True, show_progress=False)       
+            self.particle_props.T = T
+
 
     def eval_density(
             self,
-            use_TF: bool = True,
+            use_LDA: bool = True,
             max_iter: int = 1000,
             mu_convergence_threshold: float = 1e-5,
             N_convergence_threshold: float = 1e-3,
-            mu_change_rate: float = 0.01,
+            mu_change_rate: float = 0.1,
             mu_change_rate_adjustment: int = 5,
             print_convergence_info_at_this_iteration: int = 0,
             show_progress: bool = True,
@@ -159,12 +165,8 @@ class FermiGas:
         satisfied with the convergence.
         
            Args:
-               use_TF: if True, use the Thomas-Fermi approximation to update n0, 
-                       if False, the generalized GPE is solved numerically to update n0
-                       (might be computationally intensive). Defaults to True.
-               use_Popov: if True, use the semiclassical Popov approximation to update n_ex,
-                          if False, use the semiclassical Hartree-Fock approximation to update n_ex.
-                          Defaults to False. TODO: Fix division by zero problem in Popov implementation!
+               use_LDA: if True, use the semiclassical LDA to update n, if False, use the Thomas-Fermi 
+                        approximation to update n. Defaults to True.
                max_iter: maximum number of iterations
                mu_convergence_threshold: We call the iterative procedure converged if the change in
                                          chemical potential from one iteration to the next is smaller than 
@@ -184,7 +186,7 @@ class FermiGas:
                               which iteration convergence was reached. Defaults to True.
         """
         # Approximation
-        self.use_TF = use_TF
+        self.use_LDA = use_LDA
 
         # Set up convergence history list for the plot_convergence_history() method
         self.convergence_history_mu = [self.mu.value]
@@ -194,10 +196,12 @@ class FermiGas:
         iterator = tqdm(range(max_iter)) if show_progress else range(max_iter)
         for iteration in iterator: 
             # Update density n
-            if self.use_TF:
+            if self.particle_props.T.value < 1e-3:
                 self._update_n_with_TF_approximation()
+            elif self.use_LDA:
+                self._update_n_with_LDA()
             else:
-                raise NotImplementedError("This method is not implemented yet.")
+                raise NotImplementedError("Only LDA is implemented so far.")
             
             # Update the particle number
             self.N_particles = np.sum(self.n_array) * self.dx*self.dy*self.dz
@@ -247,12 +251,82 @@ class FermiGas:
                 break
 
 
-    def _update_n_with_TF_approximation(self):
+    def _update_n_with_TF_approximation(
+            self,
+        ):
+        """Update the density `n_array` using the Thomas-Fermi approximation. The density is zero where the
+           chemical potential is smaller than the external trapping potential. Else, the density is given by
+           the Thomas-Fermi approximation."""
         mask = (self.mu - self.V_trap_array) >= 0
         self.n_array = np.zeros_like(self.V_trap_array.value)
         self.n_array[mask] = (1/(6*np.pi**2) * ((2*self.particle_props.m/(hbar**2) * k_B) * \
                                      (self.mu - self.V_trap_array[mask]))**(3/2)).to(1/u.um**3).value
         self.n_array = self.n_array * 1/u.um**3
+
+
+
+    def _update_n_with_LDA(
+            self,
+            num_q_values: int = 50,
+        ):
+        """Update the density `n_array` using the local density approximation. This means unsing a semiclassical
+           approximation to integrate the Fermi-Dirac distribution over momentum space, where we insert for the
+           single-particle energy the classical expression eps(p,r) = p^2/2m + V_trap(r)."""
+        # Since we are at low temperature, integrating to infinite momentum is not necessary
+        # and will only lead to numerical problems since our excited particles have very low p
+        # and numerically we can only sum over a finite set of integrand evaluations and very
+        # likely just skip the region of interest (low p) und get out 0 from the integration.
+        # Thus we set a cutoff at p_cutoff = sqrt(2*pi*m*k*T) which corresponds to the momentum
+        # scale of the thermal de Broglie wavelength (i.e. lambda_dB = h/p_cutoff).
+        p_cutoff = np.sqrt(2*np.pi*self.particle_props.m*k_B*self.particle_props.T).to(u.u*u.m/u.s) # use this momentum units to deal with numerical
+                                                                      # numbers roughly on the order ~1
+
+        # Also, for increased numerical stability, we can rescale the integral to the interval 
+        # [0,1] and integrate over the dimensionless variable q = p/p_cutoff instead of p.
+
+        q_values = np.linspace(0, 1, num_q_values) 
+        q_values = q_values[:, np.newaxis, np.newaxis, np.newaxis] # reshape to broadcast with spacial grid later 
+
+        # Integrate using Simpson's rule (I chose this over quad() because quad() only works for scalar
+        # integrands, but we have a 3d array of integrand values. So to use quad() we would need to loop
+        # over the spatial grid and call quad() for each grid point, which is very slow. Simpson() can
+        # integrate over the whole array at once in a vectorized way, which is much faster.)
+        integral = simpson(self._integrand_FD(q_values, p_cutoff), q_values.flatten(), axis=0)
+
+        # Update n_array
+        self.n_array = np.maximum((integral*(p_cutoff.unit)**3 / (2*np.pi * hbar)**3).to(1/u.um**3), 0)
+
+
+    def _integrand_FD(
+            self, 
+            q: Union[float, np.ndarray],
+            p_cutoff: Quantity,
+        ) -> np.ndarray:
+        """Calculate the integrand, which is a Fermi Dirac distribution with inserted classical energy 
+           eps(p,r) = p^2/2m + V_trap(r). The 3d integral over momentum space becomes a 1d integral over 
+           the absolute value of momentum since we can carry out the angular integrals analytically leading
+           to an additional factor 4pi*p^2 in our integrand.  Since we rescale the integral to integrate over 
+           the dimensionless variable q = p/p_cutoff, we additionally need to multiply the integrand by p_cutoff.
+        
+           Args:
+                q: dimensionless integration variable defined as q = p/p_cutoff
+                p_cutoff: cutoff momentum for the integration
+                
+            Returns:
+                f: Integrand p_cutoff*4*pi*p^2*f(eps_p) for the integration over q in the interval [0,1]
+        """
+        p = q * p_cutoff
+
+        # Calculation of eps_p(r) 
+        eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array 
+
+        return p_cutoff.value*4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) - 1) 
+        #denominator = np.exp((eps_p-self.mu) / self.particle_props.T) - 1
+        #mask = denominator != 0 # avoid division by zero
+        #f = np.zeros_like(eps_p.value)
+        #f[mask] = 1 / denominator[mask]
+#
+        #return p_cutoff.value*4*np.pi*p.value**2 * f 
 
 
     def plot_convergence_history(
@@ -267,7 +341,7 @@ class FermiGas:
                 start: start index of the convergence history list to be plotted. Defaults to 0.
                 end: end index of the convergence history list to be plotted. Defaults to -1, i.e. last index.
         """
-        if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
+        if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_array) > 0:
             title = kwargs.get('title', 'Convergence history, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))  
             filename = kwargs.get('filename', None)
 
@@ -301,7 +375,7 @@ class FermiGas:
             **kwargs,
         ):
         """Plot the spacial density n(x,0,0), n(0,y,0) and n(0,0,z) along each direction respectively."""
-        if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
+        if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_array) > 0:
             title = kwargs.get('title', 'Spacial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))  
             filename = kwargs.get('filename', None) 
 
@@ -354,7 +428,7 @@ class FermiGas:
 
     def plot_density_2d(self, **kwargs):
         """Plot the spatial density n(x,y,0), n(x,0,z) and n(0,y,z) along two directions respectively."""
-        if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
+        if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_array) > 0:
             title = kwargs.get('title', 'Spatial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))
             filename = kwargs.get('filename', None)
 

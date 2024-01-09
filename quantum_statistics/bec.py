@@ -91,6 +91,7 @@ class BEC:
                V_trap (Callable): Function that returns the trapping potential of the system at given position(s).
                a_s (Quantity or float, optional): s-wave scattering length of the particles in [m].
                name (str): Name of the particle.
+               init_with_zero_T (bool): If True, run a zero-temperature calculation to improve initial guess for `mu`.
                **V_trap_kwargs: Keyword arguments to pass to V_trap.
         """
         # Initialize particle properties
@@ -304,10 +305,10 @@ class BEC:
            density is physically meaningless.
         """
         # Calculate n0 with current chemical potential 
-        mask = self.mu > (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array)
-        self.n0_array = np.zeros_like(self.V_trap_array) 
-        self.n0_array[mask] = (self.mu - (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array))[mask] / self.particle_props.g
-        #self.n0_array = np.maximum((self.mu - (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array)) / self.particle_props.g, 0)
+        #mask = self.mu > (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array)
+        #self.n0_array = np.zeros_like(self.V_trap_array) 
+        #self.n0_array[mask] = (self.mu - (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array))[mask] / self.particle_props.g
+        self.n0_array = np.maximum((self.mu - (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array)) / self.particle_props.g, 0)
 
 
     def _update_n0_by_solving_generalized_GPE(self,):
@@ -379,6 +380,12 @@ class BEC:
         eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + 2*self.particle_props.g*(self.n0_array + self.n_ex_array)
 
         return p_cutoff.value*4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) - 1) 
+        #denominator = np.exp((eps_p-self.mu) / self.particle_props.T) - 1
+        #mask = denominator != 0 # avoid division by zero
+        #f = np.zeros_like(eps_p.value)
+        #f[mask] = 1 / denominator[mask]
+#
+        #return p_cutoff.value*4*np.pi*p.value**2 * f 
 
 
     def _integrand_Popov(
@@ -519,95 +526,76 @@ class BEC:
             print("No convergence history found. Please run eval_density() first.")
 
 
-    def plot_density_2d(
-            self, 
-            **kwargs,
-        ):
-        """Plot the spacial density n(x,y,0), n(x,0,z) and n(0,y,z) along two directions respectively."""
+
+    def plot_density_2d(self, which: str = 'all', **kwargs):
+        """Plot the spatial density n(x,y,0), n(x,0,z) and n(0,y,z) along two directions respectively.
+        
+        Args:
+                which: which densities to plot, either 'all', 'n', 'n0', or 'n_ex'. Defaults to 'all'."""
+
         if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
-            title = kwargs.get('title', 'Spacial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))
-            filename = kwargs.get('filename', None) 
+            title = kwargs.get('title', 'Spatial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))
+            filename = kwargs.get('filename', None)
 
-            # Define the figure and GridSpec layout
-            fig = plt.figure(figsize=(17, 13))
-            gs = gridspec.GridSpec(3, 4, width_ratios=[1, 1, 1, 0.05])  # 3 columns for plots, 1 for colorbars
-            gs.update(wspace=0.65)  # Adjust spacing if needed
-
-            # Create subplots
-            axs = [[None for _ in range(3)] for _ in range(3)]
-            for i in range(3):
-                for j in range(3):
-                    axs[i][j] = plt.subplot(gs[i, j])
-
+            # Determine the number of rows for the plot
+            nrows = 1 if which != 'all' else 3
+            fig = plt.figure(figsize=(17, 5 * nrows))
+            gs = gridspec.GridSpec(nrows, 4, width_ratios=[1, 1, 1, 0.05])
+            gs.update(wspace=0.65)
             fig.suptitle(title, fontsize=24, y=0.94)
 
-            im = [[None for _ in range(3)] for _ in range(3)]
-
-            im[0][0] = axs[0][0].imshow(self.n_array[:,:,self.num_grid_points[2]//2].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.y[-1].value])
-            axs[0][0].set_title(r'$n(x,y,0)$', fontsize=18)
-            im[0][1] = axs[0][1].imshow(self.n_array[:,self.num_grid_points[1]//2,:].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value])
-            axs[0][1].set_title(r'$n(x,0,z)$', fontsize=18)
-            im[0][2] = axs[0][2].imshow(self.n_array[self.num_grid_points[0]//2,:,:].value, \
-                                        extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value])
-            axs[0][2].set_title(r'$n(0,y,z)$', fontsize=18)
-
-
-            im[1][0] = axs[1][0].imshow(self.n0_array[:,:,self.num_grid_points[2]//2].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.y[-1].value])
-            axs[1][0].set_title(r'$n_0(x,y,0)$', fontsize=18)
-            im[1][1] = axs[1][1].imshow(self.n0_array[:,self.num_grid_points[1]//2,:].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value])
-            axs[1][1].set_title(r'$n_0(x,0,z)$', fontsize=18)
-            im[1][2] = axs[1][2].imshow(self.n0_array[self.num_grid_points[0]//2,:,:].value, \
-                                        extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value])
-            axs[1][2].set_title(r'$n_0(0,y,z)$', fontsize=18)
-
-
-            im[2][0] = axs[2][0].imshow(self.n_ex_array[:,:,self.num_grid_points[2]//2].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.y[-1].value])
-            axs[2][0].set_title(r'$n_{ex}(x,y,0)$', fontsize=18)
-            im[2][1] = axs[2][1].imshow(self.n_ex_array[:,self.num_grid_points[1]//2,:].value, \
-                                        extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value])
-            axs[2][1].set_title(r'$n_{ex}(x,0,z)$', fontsize=18)
-            im[2][2] = axs[2][2].imshow(self.n_ex_array[self.num_grid_points[0]//2,:,:].value, \
-                                        extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value])
-            axs[2][2].set_title(r'$n_{ex}(0,y,z)$', fontsize=18)
-
-
-            for i in range(3):
+            # Function to create plots for a given density array
+            def create_plots(density_array, row_idx, density_label):
                 for j in range(3):
-                    axs[i][0].set_xlabel('x [μm]', fontsize=12)
-                    axs[i][0].set_ylabel('y [μm]', fontsize=12)
-                    axs[i][1].set_xlabel('x [μm]', fontsize=12)
-                    axs[i][1].set_ylabel('z [μm]', fontsize=12)
-                    axs[i][2].set_xlabel('y [μm]', fontsize=12)
-                    axs[i][2].set_ylabel('z [μm]', fontsize=12)
+                    ax = plt.subplot(gs[row_idx, j])
+                    # Determine the 2D slice based on the subplot
+                    if j == 0:  # x-y plane
+                        slice_2d = density_array[:, :, self.num_grid_points[2]//2].value
+                    elif j == 1:  # x-z plane
+                        slice_2d = density_array[:, self.num_grid_points[1]//2, :].value
+                    else:  # y-z plane
+                        slice_2d = density_array[self.num_grid_points[0]//2, :, :].value
 
-                    divider = make_axes_locatable(axs[i][j])
+                    # Plotting
+                    im = ax.imshow(slice_2d.T, extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.z[-1].value])
+                    ax.set_title(f'${density_label}({", ".join("xyz"[k] if k == j else "0" for k in range(3))})$', fontsize=18)
+                    ax.set_xlabel(f'{["x", "y", "z"][j]} [μm]', fontsize=12)
+                    ax.set_ylabel(f'{["y", "z", "x"][j]} [μm]', fontsize=12)
+
+                    divider = make_axes_locatable(ax)
                     cax = divider.append_axes("right", size="5%", pad=0.05)
-                    cbar = fig.colorbar(im[i][j], cax=cax)
-                    if i == 0:
-                        cbar.ax.set_title(r'$n \; \left[ \mu m^{-3} \right]$', pad=6, fontsize=12, loc='left')
-                    if i == 1:
-                        cbar.ax.set_title(r'$n_0 \; \left[ \mu m^{-3} \right]$', pad=6, fontsize=12, loc='left')
-                    if i == 2:
-                        cbar.ax.set_title(r'$n_{ex} \; \left[ \mu m^{-3} \right]$', pad=6, fontsize=12, loc='left')
-                    
-            if filename != None:
+                    cbar = fig.colorbar(im, cax=cax)
+                    cbar.ax.set_title(str(density_label) + r' $\left[ \mu m^{-3} \right]$', pad=6, fontsize=12, loc='left')
+
+            # Plotting based on 'which' parameter
+            row_idx = 0
+            if which in ['all', 'n']:
+                create_plots(self.n_array, row_idx, 'n')
+                row_idx += 1
+            if which in ['all', 'n0']:
+                create_plots(self.n0_array, row_idx, 'n_0')
+                row_idx += 1
+            if which in ['all', 'n_ex']:
+                create_plots(self.n_ex_array, row_idx, 'n_{ex}')
+
+            if filename is not None:
                 fig.savefig(filename, dpi=300, bbox_inches='tight')
 
-            return axs
-        
+            plt.show()
+
         else:
             print("No convergence history found. Please run eval_density() first.")
 
-
-
+   
     def plot_all(
             self,
+            which: str = 'all',
     ):
+        """Plot all convergence history and all densities.
+        
+           Args:
+                which: which densities to plot, either 'all', 'n', 'n0', or 'n_ex'. Defaults to 'all'.
+        """
         a = self.plot_convergence_history()
         b = self.plot_density_1d()
-        c = self.plot_density_2d()
+        c = self.plot_density_2d(which)
