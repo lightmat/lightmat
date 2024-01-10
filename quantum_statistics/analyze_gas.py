@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 import astropy.units as u
 from typing import Union, Sequence
+from astropy.units import Quantity
 
 from .bec import BEC
 from .fermi_gas import FermiGas
@@ -115,6 +116,68 @@ def box_2d_harmonic_1d_trap(
 
 
 
+def ring_beam_trap(
+        x: Union[float, np.ndarray],
+        y: Union[float, np.ndarray],
+        z: Union[float, np.ndarray],
+        flat_sizes: Sequence[float] = (100, 100, 20),
+        boundary_waists: Sequence[float] = (6, 6, 13),
+        blue_trap_hight: float = 300,
+        red_trap_depth: float = 100,
+        inhomogenity: float = 0.01,
+):
+    x = np.asarray(x)
+    y = np.asarray(y)
+    z = np.asarray(z)
+    if isinstance(x, Quantity):
+        x = x.to(u.um).value
+    if isinstance(y, Quantity):
+        y = y.to(u.um).value
+    if isinstance(z, Quantity):
+        z = z.to(u.um).value
+    if isinstance(flat_sizes, Quantity):
+        flat_sizes = flat_sizes.to(u.um).value
+    if isinstance(boundary_waists, Quantity):
+        boundary_waists = boundary_waists.to(u.um).value
+    if isinstance(blue_trap_hight, Quantity):
+        blue_trap_hight = blue_trap_hight.to(u.nK).value
+    if isinstance(red_trap_depth, Quantity):
+        red_trap_depth = red_trap_depth.to(u.nK).value
+
+    # Extract 1d arrays x,y,z if X,Y,Z are regular meshgrid
+    if x.ndim > 1:
+        x = x[:,0,0]
+    if y.ndim > 1:
+        y = y[0,:,0]
+    if z.ndim > 1:
+        z = z[0,0,:]
+
+    ring_radius_x = 0.5 * flat_sizes[0]
+    ring_radius_y = 0.5 * flat_sizes[1]
+    waist_of_ring_x = boundary_waists[0]
+    waist_of_ring_y = boundary_waists[1]
+    I_ring_x = np.exp(-2 * (x-ring_radius_x)**2 / waist_of_ring_x**2) + np.exp(-2 * (x+ring_radius_x)**2 / waist_of_ring_x**2)
+    I_ring_y = np.exp(-2 * (y-ring_radius_y)**2 / waist_of_ring_y**2) + np.exp(-2 * (y+ring_radius_y)**2 / waist_of_ring_y**2)
+
+    Vx = blue_trap_hight * I_ring_x/np.max(I_ring_x)
+    Vy = blue_trap_hight * I_ring_y/np.max(I_ring_y)
+
+    waist_z = boundary_waists[2]
+    flat_width_z = flat_sizes[2]
+    flat_region_z = (np.abs(z) <= flat_width_z / 2)
+    gaussian_edges = np.exp(-2 * ((z-flat_width_z/2)**2) / waist_z**2) + np.exp(-2 * ((z+flat_width_z/2)**2) / waist_z**2)
+    Vz = -red_trap_depth * gaussian_edges/np.max(gaussian_edges)
+    Vz[flat_region_z] = - red_trap_depth
+
+    VX, VY, VZ = np.meshgrid(Vx, Vy, Vz, indexing='ij')
+    V_trap = VX + VY + VZ
+
+    # Add noise
+    noise = np.random.rand(*V_trap.shape) * inhomogenity * (blue_trap_hight + red_trap_depth)/2
+    return V_trap + noise
+
+
+
 def analyze_bec(Ts, particle_props, mu_change_rate=0.01, init_with_zero_T=False):
     becs = []
     mu = None
@@ -145,6 +208,7 @@ def analyze_fermi_gas(Ts, particle_props, mu_change_rate=0.01, init_with_zero_T=
         fgs.append(fg)
 
     return fgs
+
 
 
 def plot_condens_frac(Ts, becs):

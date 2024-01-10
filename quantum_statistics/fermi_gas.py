@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.integrate import simpson
+from scipy.integrate import simpson, quad_vec
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -154,6 +154,8 @@ class FermiGas:
             N_convergence_threshold: float = 1e-3,
             mu_change_rate: float = 0.1,
             mu_change_rate_adjustment: int = 5,
+            num_q_values: int = 50,
+            cutoff_factor: float = 100,
             print_convergence_info_at_this_iteration: int = 0,
             show_progress: bool = True,
         ):
@@ -178,7 +180,10 @@ class FermiGas:
                mu_change_rate_adjustment: After so many iterations the `mu_change_rate` hyperparameter gets adjusted 
                                           for faster convergence. Defaults to 5.
                num_q_values: number of integrand evaluations for the simpson rule in momentum space integral to 
-                             semiclassically calculate thermal density `n_ex_array`. Defaults to 50.
+                             semiclassically calculate density `n_array`. Defaults to 50.
+               cutoff_factor: factor to determine the cutoff momentum for the momentum space integral to semiclassically
+                              calculate density `n_array`. The cutoff momentum is given by 
+                              p_cutoff = sqrt(cutoff_factor * 2*m*k_B*T). Defaults to 100.
                print_convergence_info_at_this_iteration: if 0, don't print convergence info, if this value is i>0, 
                                                          then print convergence info every i-th iteration. Defaults to 0.
                show_progress: if True, use tqdm progress bar for for iterative algorithm and print out the iteration after
@@ -199,7 +204,7 @@ class FermiGas:
             if self.particle_props.T.value < 1e-3:
                 self._update_n_with_TF_approximation()
             elif self.use_LDA:
-                self._update_n_with_LDA()
+                self._update_n_with_LDA(num_q_values, cutoff_factor)
             else:
                 raise NotImplementedError("Only LDA is implemented so far.")
             
@@ -268,6 +273,7 @@ class FermiGas:
     def _update_n_with_LDA(
             self,
             num_q_values: int = 50,
+            cutoff_factor: float = 100,
         ):
         """Update the density `n_array` using the local density approximation. This means unsing a semiclassical
            approximation to integrate the Fermi-Dirac distribution over momentum space, where we insert for the
@@ -276,14 +282,15 @@ class FermiGas:
         # and will only lead to numerical problems since our excited particles have very low p
         # and numerically we can only sum over a finite set of integrand evaluations and very
         # likely just skip the region of interest (low p) und get out 0 from the integration.
-        # Thus we set a cutoff at p_cutoff = sqrt(2*pi*m*k*T) which corresponds to the momentum
-        # scale of the thermal de Broglie wavelength (i.e. lambda_dB = h/p_cutoff).
-        p_cutoff = np.sqrt(2*np.pi*self.particle_props.m*k_B*self.particle_props.T).to(u.u*u.m/u.s) # use this momentum units to deal with numerical
-                                                                      # numbers roughly on the order ~1
+        # Thus we set a cutoff at p_cutoff = sqrt(cutoff_factor * 2*m*k_B*T) which corresponds to 
+        # an energy scale of p_cutoff^2/(2*m) = cutoff_factor * k_B*T. This is a good approximation
+        # since the Fermi-Dirac distribution is very steep and the integral is dominated by the
+        # regions around the Fermi energy, which is of the order of k_B*T.
+        p_cutoff = np.sqrt(cutoff_factor * 2*self.particle_props.m*k_B*self.particle_props.T).to(u.u*u.m/u.s)
+        # use this momentum units to deal with numerical numbers roughly on the order ~1
 
         # Also, for increased numerical stability, we can rescale the integral to the interval 
         # [0,1] and integrate over the dimensionless variable q = p/p_cutoff instead of p.
-
         q_values = np.linspace(0, 1, num_q_values) 
         q_values = q_values[:, np.newaxis, np.newaxis, np.newaxis] # reshape to broadcast with spacial grid later 
 
@@ -291,10 +298,18 @@ class FermiGas:
         # integrands, but we have a 3d array of integrand values. So to use quad() we would need to loop
         # over the spatial grid and call quad() for each grid point, which is very slow. Simpson() can
         # integrate over the whole array at once in a vectorized way, which is much faster.)
-        integral = simpson(self._integrand_FD(q_values, p_cutoff), q_values.flatten(), axis=0)
+        integrand_values = self._integrand_FD(q_values, p_cutoff)
+
+        # Check if integrand is zero at q=1 and integrate over q in the interval [0,1]
+        max_integrand_val = np.max(integrand_values)
+        max_integrand_val_at_q1 = np.max(integrand_values[-1,:,:,:])
+        if max_integrand_val_at_q1 > 1e-10 * max_integrand_val: # Check if integrand is not zero at q=1
+            print("WARNING: Integrating until q=1, but integrand is not zero at q=1. Consider increasing cutoff_factor.")
+        integral = simpson(integrand_values, q_values.flatten(), axis=0)
 
         # Update n_array
         self.n_array = np.maximum((integral*(p_cutoff.unit)**3 / (2*np.pi * hbar)**3).to(1/u.um**3), 0)
+        #return self._integrand_FD(q_values, p_cutoff)
 
 
     def _integrand_FD(
@@ -320,13 +335,7 @@ class FermiGas:
         # Calculation of eps_p(r) 
         eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array 
 
-        return p_cutoff.value*4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) - 1) 
-        #denominator = np.exp((eps_p-self.mu) / self.particle_props.T) - 1
-        #mask = denominator != 0 # avoid division by zero
-        #f = np.zeros_like(eps_p.value)
-        #f[mask] = 1 / denominator[mask]
-#
-        #return p_cutoff.value*4*np.pi*p.value**2 * f 
+        return p_cutoff.value*4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) + 1) 
 
 
     def plot_convergence_history(
@@ -445,21 +454,21 @@ class FermiGas:
             # Plotting n(x,y,0), n(x,0,z), n(0,y,z)
             im = []
             im.append(axs[0].imshow(self.n_array[:, :, self.num_grid_points[2]//2].value, 
-                                    extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.y[-1].value]))
+                                    extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.y[-1].value], origin='lower'))
             axs[0].set_title(r'$n(x,y,0)$', fontsize=18)
 
             im.append(axs[1].imshow(self.n_array[:, self.num_grid_points[1]//2, :].value, 
-                                    extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value]))
+                                    extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value], origin='lower'))
             axs[1].set_title(r'$n(x,0,z)$', fontsize=18)
 
             im.append(axs[2].imshow(self.n_array[self.num_grid_points[0]//2, :, :].value, 
-                                    extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value]))
+                                    extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value], origin='lower'))
             axs[2].set_title(r'$n(0,y,z)$', fontsize=18)
 
             # Set labels and colorbars for each plot
             for i, ax in enumerate(axs):
-                ax.set_xlabel('x [μm]' if i != 2 else 'y [μm]', fontsize=12)
-                ax.set_ylabel('y [μm]' if i != 2 else 'z [μm]', fontsize=12)
+                ax.set_xlabel('y [μm]' if i != 2 else 'z [μm]', fontsize=12)
+                ax.set_ylabel('x [μm]' if i != 2 else 'y [μm]', fontsize=12)
 
                 divider = make_axes_locatable(ax)
                 cax = divider.append_axes("right", size="5%", pad=0.05)

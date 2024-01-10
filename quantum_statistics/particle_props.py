@@ -194,6 +194,7 @@ class ParticleProps:
     def plot_V_trap(
             self, 
             which: str = "all",
+            num_grid_points: int = 201,
         ):
         """Plots the trap potential of the system.
         
@@ -203,6 +204,14 @@ class ParticleProps:
         """
         if which not in ['all', 'all1d', 'all2d', 'x', 'y', 'z', 'xy', 'xz', 'yz']:
             raise ValueError("which must be one of 'all', 'all1d', 'all2d', 'x', 'y', 'z', 'xy', 'xz', or 'yz'.")
+        
+        x = np.linspace(self.domain[0,0].value, self.domain[0,1].value, num_grid_points) 
+        y = np.linspace(self.domain[1,0].value, self.domain[1,1].value, num_grid_points) 
+        z = np.linspace(self.domain[2,0].value, self.domain[2,1].value, num_grid_points) 
+        X, Y, Z = np.meshgrid(x, y, z, indexing="ij")
+        V_trap_result = self.V_trap(X, Y, Z)
+        if isinstance(V_trap_result, Quantity):
+            V_trap_result = V_trap_result.to(u.nK).value
 
         if which in ['all', 'all1d', 'all2d']:
             if which == 'all1d':
@@ -227,9 +236,9 @@ class ParticleProps:
             for ax, setting, title in zip(axs.flatten(), settings, titles):
                 ax.set_title(title, fontsize=18)
                 if len(setting) == 1:
-                    self._plot_1d(fig, ax, setting)
+                    self._plot_1d(V_trap_result, num_grid_points, fig, ax, setting)
                 elif len(setting) == 2:
-                    self._plot_2d(fig, ax, setting)
+                    self._plot_2d(V_trap_result, num_grid_points, fig, ax, setting)
 
             plt.tight_layout()
             plt.show()
@@ -241,83 +250,64 @@ class ParticleProps:
                 self._plot_2d(None, None, which)
 
 
-    def _plot_1d(self, fig, ax, which):
+    def _plot_1d(
+            self, 
+            V_trap_result,
+            num_grid_points,
+            fig, 
+            ax, 
+            which,
+        ):
         if ax is None:
             fig, ax = plt.subplots(figsize=(8, 6))
             fig.suptitle("Trap potential of " + self.name, fontsize=22)
 
-        # Implementation of 1D plot for 'x', 'y', or 'z'
-        domain = self.domain.to(u.um).value
         if which == "x":
-            x = np.linspace(domain[0,0], domain[0,1], 1000) 
-            y = np.array([0]) 
-            z = np.array([0]) 
-        elif which == "y":
-            x = np.array([0]) 
-            y = np.linspace(domain[1,0], domain[1,1], 1000) 
-            z = np.array([0]) 
-        elif which == "z":
-            x = np.array([0]) 
-            y = np.array([0]) 
-            z = np.linspace(domain[2,0], domain[2,1], 1000)
-
-        V_trap_result = self.V_trap(x, y, z)
-        if isinstance(V_trap_result, Quantity):
-            V_trap_result = V_trap_result.to(u.nK).value
-
-        if which == "x":
-            ax.plot(x, V_trap_result)
+            x = np.linspace(self.domain[0,0].value, self.domain[0,1].value, num_grid_points) 
+            ax.plot(x, V_trap_result[:, num_grid_points//2, num_grid_points//2])
             ax.set_xlabel(r"$x \; [\mu m]$", fontsize=18)
             ax.set_ylabel(r"$V_{trap}(x, 0, 0) \; [nK]$", fontsize=18)
         elif which == "y":
-            ax.plot(y, V_trap_result)
+            y = np.linspace(self.domain[1,0].value, self.domain[1,1].value, num_grid_points) 
+            ax.plot(y, V_trap_result[num_grid_points//2, :, num_grid_points//2])
             ax.set_xlabel(r"$y \; [\mu m]$", fontsize=18)
             ax.set_ylabel(r"$V_{trap}(0, y, 0) \; [nK]$", fontsize=18)
         elif which == "z":
-            ax.plot(z, V_trap_result)
+            z = np.linspace(self.domain[2,0].value, self.domain[2,1].value, num_grid_points)
+            ax.plot(z, V_trap_result[num_grid_points//2, num_grid_points//2, :])
             ax.set_xlabel(r"$z \; [\mu m]$", fontsize=18)
             ax.set_ylabel(r"$V_{trap}(0, 0, z) \; [nK]$", fontsize=18)
 
         ax.grid(True)
 
-    def _plot_2d(self, fig, ax, which):
+    def _plot_2d(
+            self, 
+            V_trap_result,
+            num_grid_points,
+            fig, 
+            ax, 
+            which,
+        ):
         if ax is None:
             fig, ax = plt.subplots(figsize=(8, 6))
             fig.suptitle("Trap potential of " + self.name, fontsize=22)
 
-        # Implementation of 2D plot for 'xy', 'xz', or 'yz'
-        domain = self.domain.to(u.um).value
-        if which == "xy":
-            x = np.linspace(domain[0,0], domain[0,1], 1000) 
-            y = np.linspace(domain[1,0], domain[1,1], 1000) 
-            z = np.array([0])
-        elif which == "xz":
-            x = np.linspace(domain[0,0], domain[0,1], 1000) 
-            y = np.array([0])
-            z = np.linspace(domain[2,0], domain[2,1], 1000)
-        elif which == "yz":
-            x = np.array([0])
-            y = np.linspace(domain[1,0], domain[1,1], 1000) 
-            z = np.linspace(domain[2,0], domain[2,1], 1000)
-
-        X, Y, Z = np.meshgrid(x, y, z, indexing="ij")
-        V_trap_result = self.V_trap(X, Y, Z)
-        if isinstance(V_trap_result, Quantity):
-            V_trap_result = V_trap_result.to(u.nK).value
-
         im = None
         if which == "xy":
-            im = ax.imshow(V_trap_result[:, :, 0], extent=[x[0], x[-1], y[0], y[-1]], origin='lower')
-            ax.set_xlabel(r"$x \; [\mu m]$", fontsize=18)
-            ax.set_ylabel(r"$y \; [\mu m]$", fontsize=18)
-        elif which == "xz":
-            im = ax.imshow(V_trap_result[:, 0, :], extent=[x[0], x[-1], z[0], z[-1]], origin='lower')
-            ax.set_xlabel(r"$x \; [\mu m]$", fontsize=18)
-            ax.set_ylabel(r"$z \; [\mu m]$", fontsize=18)
-        elif which == "yz":
-            im = ax.imshow(V_trap_result[0, :, :], extent=[y[0], y[-1], z[0], z[-1]], origin='lower')
+            im = ax.imshow(V_trap_result[:,:,num_grid_points//2], extent=[self.domain[0,0].value, self.domain[0,1].value, \
+                            self.domain[1,0].value, self.domain[1,1].value], origin='lower')
             ax.set_xlabel(r"$y \; [\mu m]$", fontsize=18)
-            ax.set_ylabel(r"$z \; [\mu m]$", fontsize=18)
+            ax.set_ylabel(r"$x \; [\mu m]$", fontsize=18)
+        elif which == "xz":
+            im = ax.imshow(V_trap_result[:,num_grid_points//2,:], extent=[self.domain[0,0].value, self.domain[0,1].value, \
+                            self.domain[2,0].value, self.domain[2,1].value], origin='lower')
+            ax.set_xlabel(r"$z \; [\mu m]$", fontsize=18)
+            ax.set_ylabel(r"$x \; [\mu m]$", fontsize=18)
+        elif which == "yz":
+            im = ax.imshow(V_trap_result[num_grid_points//2,:,:], extent=[self.domain[1,0].value, self.domain[1,1].value, \
+                            self.domain[2,0].value, self.domain[2,1].value], origin='lower')
+            ax.set_xlabel(r"$z \; [\mu m]$", fontsize=18)
+            ax.set_ylabel(r"$y \; [\mu m]$", fontsize=18)
 
         if im is not None:
             # Create an axis for the colorbar

@@ -175,6 +175,7 @@ class BEC:
             mu_change_rate: float = 0.01,
             mu_change_rate_adjustment: int = 5,
             num_q_values: int = 50,
+            cutoff_factor: float = 10,
             print_convergence_info_at_this_iteration: int = 0,
             show_progress: bool = True,
         ):
@@ -204,6 +205,9 @@ class BEC:
                                           for faster convergence. Defaults to 5.
                num_q_values: number of integrand evaluations for the simpson rule in momentum space integral to 
                              semiclassically calculate thermal density `n_ex_array`. Defaults to 50.
+               cutoff_factor: factor to determine the cutoff momentum for the momentum space integral to semiclassically
+                              calculate thermal density `n_ex_array`. The cutoff momentum is given by
+                              p_cutoff = sqrt(cutoff_factor * 2*pi*m*k*T). Defaults to 10.
                print_convergence_info_at_this_iteration: if 0, don't print convergence info, if this value is i>0, 
                                                          then print convergence info every i-th iteration. Defaults to 0.
                show_progress: if True, use tqdm progress bar for for iterative algorithm and print out the iteration after
@@ -233,8 +237,8 @@ class BEC:
             
             # Update non-condensed density n_ex if T>0 (otherwise we have n_ex=0)
             if self.particle_props.T.value > 1e-3:
-                self._update_n_ex(num_q_values) # This uses either the semiclassical HF or Popov approximation
-                                                # depending on the self.use_Popov flag.
+                self._update_n_ex(num_q_values, cutoff_factor) # This uses either the semiclassical HF or Popov approximation
+                                                               # depending on the self.use_Popov flag.
             
             # Update the total density n = n0 + nex
             self.n_array = self.n0_array + self.n_ex_array
@@ -319,6 +323,7 @@ class BEC:
     def _update_n_ex(
             self,
             num_q_values: int = 50,
+            cutoff_factor: float = 10,
         ):
         """Apply the semiclassical Hartree-Fock or Popov approximation to update the non-condensed 
            density `n_ex_array`. 
@@ -333,12 +338,11 @@ class BEC:
         # likely just skip the region of interest (low p) und get out 0 from the integration.
         # Thus we set a cutoff at p_cutoff = sqrt(2*pi*m*k*T) which corresponds to the momentum
         # scale of the thermal de Broglie wavelength (i.e. lambda_dB = h/p_cutoff).
-        p_cutoff = np.sqrt(2*np.pi*self.particle_props.m*k_B*self.particle_props.T).to(u.u*u.m/u.s) # use this momentum units to deal with numerical
-                                                                      # numbers roughly on the order ~1
+        p_cutoff = np.sqrt(cutoff_factor * 2*np.pi*self.particle_props.m*k_B*self.particle_props.T).to(u.u*u.m/u.s) 
+        # use this momentum units to deal with numerical numbers roughly on the order ~1
 
         # Also, for increased numerical stability, we can rescale the integral to the interval 
         # [0,1] and integrate over the dimensionless variable q = p/p_cutoff instead of p.
-
         q_values = np.linspace(0, 1, num_q_values) 
         q_values = q_values[:, np.newaxis, np.newaxis, np.newaxis] # reshape to broadcast with spacial grid later 
 
@@ -347,12 +351,20 @@ class BEC:
         # over the spatial grid and call quad() for each grid point, which is very slow. Simpson() can
         # integrate over the whole array at once in a vectorized way, which is much faster.)
         if self.use_Popov:
-            integral = simpson(self._integrand_Popov(q_values, p_cutoff), q_values.flatten(), axis=0)
+            integrand_values = self._integrand_Popov(q_values, p_cutoff)
         else:
-            integral = simpson(self._integrand_HF(q_values, p_cutoff), q_values.flatten(), axis=0)
+            integrand_values = self._integrand_HF(q_values, p_cutoff)
 
+        # Check if integrand is zero at q=1 and integrate over q in the interval [0,1]
+        max_integrand_val = np.max(integrand_values)
+        max_integrand_val_at_q1 = np.max(integrand_values[-1,:,:,:])
+        if max_integrand_val_at_q1 > 1e-10 * max_integrand_val: # Check if integrand is not zero at q=1
+            print("WARNING: Integrating until q=1, but integrand is not zero at q=1. Consider increasing cutoff_factor.")
+        integral = simpson(integrand_values, q_values.flatten(), axis=0)
+#
         # Update n_ex_array 
         self.n_ex_array = np.maximum((integral*(p_cutoff.unit)**3 / (2*np.pi * hbar)**3).to(1/u.um**3), 0)
+        #return self._integrand_HF(q_values, p_cutoff)
 
 
     def _integrand_HF(
@@ -380,12 +392,7 @@ class BEC:
         eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + 2*self.particle_props.g*(self.n0_array + self.n_ex_array)
 
         return p_cutoff.value*4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) - 1) 
-        #denominator = np.exp((eps_p-self.mu) / self.particle_props.T) - 1
-        #mask = denominator != 0 # avoid division by zero
-        #f = np.zeros_like(eps_p.value)
-        #f[mask] = 1 / denominator[mask]
-#
-        #return p_cutoff.value*4*np.pi*p.value**2 * f 
+
 
 
     def _integrand_Popov(
@@ -551,16 +558,21 @@ class BEC:
                     # Determine the 2D slice based on the subplot
                     if j == 0:  # x-y plane
                         slice_2d = density_array[:, :, self.num_grid_points[2]//2].value
+                        im = ax.imshow(slice_2d, extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.z[-1].value], \
+                                       origin='lower')
                     elif j == 1:  # x-z plane
                         slice_2d = density_array[:, self.num_grid_points[1]//2, :].value
+                        im = ax.imshow(slice_2d, extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value], \
+                                       origin='lower')
                     else:  # y-z plane
                         slice_2d = density_array[self.num_grid_points[0]//2, :, :].value
+                        im = ax.imshow(slice_2d, extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value], \
+                                       origin='lower')
 
                     # Plotting
-                    im = ax.imshow(slice_2d.T, extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.z[-1].value])
                     ax.set_title(f'${density_label}({", ".join("xyz"[k] if k == j else "0" for k in range(3))})$', fontsize=18)
-                    ax.set_xlabel(f'{["x", "y", "z"][j]} [μm]', fontsize=12)
-                    ax.set_ylabel(f'{["y", "z", "x"][j]} [μm]', fontsize=12)
+                    ax.set_xlabel(f'{["y", "z", "x"][j]} [μm]', fontsize=12)
+                    ax.set_ylabel(f'{["x", "y", "z"][j]} [μm]', fontsize=12)
 
                     divider = make_axes_locatable(ax)
                     cax = divider.append_axes("right", size="5%", pad=0.05)
@@ -570,13 +582,13 @@ class BEC:
             # Plotting based on 'which' parameter
             row_idx = 0
             if which in ['all', 'n']:
-                create_plots(self.n_array, row_idx, 'n')
+                create_plots(self.n_array, row_idx, r'$n$')
                 row_idx += 1
             if which in ['all', 'n0']:
-                create_plots(self.n0_array, row_idx, 'n_0')
+                create_plots(self.n0_array, row_idx, r'$n_0$')
                 row_idx += 1
             if which in ['all', 'n_ex']:
-                create_plots(self.n_ex_array, row_idx, 'n_{ex}')
+                create_plots(self.n_ex_array, row_idx, r'$n_{ex}$')
 
             if filename is not None:
                 fig.savefig(filename, dpi=300, bbox_inches='tight')
