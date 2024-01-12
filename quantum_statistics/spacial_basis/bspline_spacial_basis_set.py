@@ -29,9 +29,16 @@ class BSplineSpacialBasisSet(SpacialBasisSet):
             knots_x, knots_y, knots_z = self._create_adaptive_knots_3d()
             self.knots = [knots_x, knots_y, knots_z]
         else:
-            knots_x = np.linspace(self.domain[0, 0], self.domain[0, 1], self.num_knots[0])
-            knots_y = np.linspace(self.domain[1, 0], self.domain[1, 1], self.num_knots[1])
-            knots_z = np.linspace(self.domain[2, 0], self.domain[2, 1], self.num_knots[2])
+            knots_x = [self.domain[0,0]]*self.degree[0] + list(np.linspace(self.domain[0,0], self.domain[0,1], \
+                                                                           self.num_knots[0]-(2*self.degree[0]))) + \
+                      [self.domain[0,1]]*self.degree[0]
+            knots_y = [self.domain[1,0]]*self.degree[1] + list(np.linspace(self.domain[1,0], self.domain[1,1], \
+                                                                           self.num_knots[1]-(2*self.degree[1]))) + \
+                      [self.domain[1,1]]*self.degree[1]
+            knots_z = [self.domain[2,0]]*self.degree[2] + list(np.linspace(self.domain[2,0], self.domain[2,1], \
+                                                                           self.num_knots[2]-(2*self.degree[2]))) + \
+                      [self.domain[2,1]]*self.degree[2]
+            
             self.knots = [knots_x, knots_y, knots_z]
 
         splines_x, splines_y, splines_z = self._generate_splines()

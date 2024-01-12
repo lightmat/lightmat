@@ -5,7 +5,7 @@ import astropy.units as u
 from typing import Union, Sequence
 from astropy.units import Quantity
 
-from .bec import BEC
+from .bose_gas import BoseGas
 from .fermi_gas import FermiGas
 
 
@@ -36,7 +36,7 @@ def harmonic_trap(
     perfect_harmonic_trap = -trap_depth * gaussian_profile
 
     # Add noise
-    noise = np.random.rand(*perfect_harmonic_trap.shape) * inhomogenity * trap_depth
+    noise = np.random.rand(*perfect_harmonic_trap.shape, ) * inhomogenity * trap_depth
     return perfect_harmonic_trap + noise
 
 
@@ -184,7 +184,7 @@ def analyze_bec(Ts, particle_props, mu_change_rate=0.01, init_with_zero_T=False)
     for T in Ts:
         pp = particle_props.copy()
         pp.T = T
-        bec = BEC(pp, init_with_zero_T=init_with_zero_T)
+        bec = BoseGas(pp, init_with_zero_T=init_with_zero_T)
         if mu is not None:
             bec.mu = mu # initialize mu with previous converged value
         bec.eval_density(mu_change_rate=mu_change_rate)

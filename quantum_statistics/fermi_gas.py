@@ -1,5 +1,6 @@
 import numpy as np
-from scipy.integrate import simpson, quad_vec
+import sparse
+from scipy.integrate import simpson
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -7,7 +8,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import astropy.units as u
 from astropy.constants import hbar, k_B
 from astropy.units import Quantity
-from typing import Callable, Union, Sequence
+from typing import Union, Sequence
 
 from .particle_props import ParticleProps
 
@@ -48,57 +49,29 @@ class FermiGas:
     """
     def __init__(
             self, 
-            particle_props: ParticleProps = None,
-            m: Union[float, Quantity] = None, 
-            N_particles: int = None, 
-            T: Union[float, Quantity] = None,
-            domain: Union[Sequence[float], Sequence[Sequence[float]], np.ndarray, Quantity] = None,
+            particle_props: ParticleProps,
             num_grid_points: Union[int, Sequence[int], np.ndarray] = [101, 101, 101],
-            V_trap: Union[Callable, np.ndarray, Quantity] = None, 
             init_with_zero_T: bool = True,
-            **V_trap_kwargs,
         ):
         """Initialize FermiGas class. Make sure to use the correct units as specified below!!! If you are 
            using astropy units, you can use units that are equilvalent to the ones specified below.
         
            Args:
                particle_props: Instance of ParticleProps class containing all relevant particle properties.
-                               If particle_props is provided, all other parameters except of `num_grid_points`
-                               are ignored.
-               species (str): Type of the particle, either 'fermion' or 'boson'.
-               m (Quantity or float): Mass of the particle, in [kg].
-               N_particles (int): Number of particles in the system.
-               T (Quantity or float): Temperature of the system, in [nK].
-               domain (Sequence, np.ndarray, or Quantity): Spatial domain of the system. Either a sequence of length 2
-                                                           containing the same x,y,z domain, or a sequence of length 3
-                                                           containing sequences of length 2 containing the x,y,z domain
-                                                           in [um].
                num_grid_points (Sequence, np.ndarray, or int): Number of grid points in each spatial dimension. Either
                                                                a sequence of length 3 containing the number of grid points
                                                                in each dimension, or a single integer specifying the same
-                                                               number of grid points in each dimension.
-               V_trap (Callable): Function that returns the trapping potential of the system at given position(s).
-               name (str): Name of the particle.
+                                                               number of grid points in each dimension. Defaults to 101.
                init_with_zero_T (bool): If True, run a zero-temperature calculation to improve initial guess for `mu`.
-               **V_trap_kwargs: Keyword arguments to pass to V_trap.
         """
         # Initialize particle properties
-        if particle_props and isinstance(particle_props, ParticleProps):
-            self.particle_props = particle_props
+        if isinstance(particle_props, ParticleProps):
+            if particle_props.species == 'fermion':
+                self.particle_props = particle_props
+            else:
+                raise ValueError('particle_props must be a fermion ParticleProps object')
         else:
-            # Check if all required parameters are provided
-            if None in [m, N_particles, T, domain, V_trap]:
-                raise ValueError("All parameters must be provided if not using a ParticleProps instance.")
-            self.particle_props = ParticleProps(
-                name="FermiGas Particle",
-                species="fermion",
-                m=m,
-                N_particles=N_particles,
-                T=T,
-                domain=domain,
-                V_trap=V_trap,
-                **V_trap_kwargs,
-            )
+            raise TypeError('particle_props must be a ParticleProps object')
 
         # Initialize the spacial grid
         if isinstance(num_grid_points, int):
@@ -298,7 +271,7 @@ class FermiGas:
         # integrands, but we have a 3d array of integrand values. So to use quad() we would need to loop
         # over the spatial grid and call quad() for each grid point, which is very slow. Simpson() can
         # integrate over the whole array at once in a vectorized way, which is much faster.)
-        integrand_values = self._integrand_FD(q_values, p_cutoff)
+        integrand_values = self._integrand_FD(q_values, p_cutoff) #sparse.COO.from_numpy(self._integrand_FD(q_values, p_cutoff))
 
         # Check if integrand is zero at q=1 and integrate over q in the interval [0,1]
         max_integrand_val = np.max(integrand_values)
@@ -309,7 +282,6 @@ class FermiGas:
 
         # Update n_array
         self.n_array = np.maximum((integral*(p_cutoff.unit)**3 / (2*np.pi * hbar)**3).to(1/u.um**3), 0)
-        #return self._integrand_FD(q_values, p_cutoff)
 
 
     def _integrand_FD(
@@ -331,10 +303,7 @@ class FermiGas:
                 f: Integrand p_cutoff*4*pi*p^2*f(eps_p) for the integration over q in the interval [0,1]
         """
         p = q * p_cutoff
-
-        # Calculation of eps_p(r) 
         eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array 
-
         return p_cutoff.value*4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) + 1) 
 
 
@@ -482,7 +451,6 @@ class FermiGas:
 
         else:
             print("No convergence history found. Please run eval_density() first.")
-
 
 
     def plot_all(

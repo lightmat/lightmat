@@ -1,4 +1,4 @@
-from .bec import BEC
+from .bose_gas import BoseGas
 from .fermi_gas import FermiGas
 from .analyze_gas import (
                           harmonic_trap,
@@ -11,10 +11,9 @@ from .analyze_gas import (
                         )       
 from .density_calculator import DensityCalculator
 from .particle_props import ParticleProps
-from .spacial_plot import SpacialPlot
 
 __all__ = [
-    "BEC",
+    "BoseGas",
     "FermiGas",
     "harmonic_trap",
     "box_trap",
@@ -25,5 +24,4 @@ __all__ = [
     "plot_condens_frac",
     "DensityCalculator",
     "ParticleProps",
-    "SpacialPlot",
 ]
