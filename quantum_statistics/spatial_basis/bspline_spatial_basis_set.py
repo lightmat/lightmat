@@ -6,10 +6,10 @@ from scipy.interpolate import BSpline
 from scipy.integrate import simps
 import sparse
 
-from .spacial_basis_set import SpacialBasisSet
+from .spatial_basis_set import SpatialBasisSet
     
 
-class BSplineSpacialBasisSet(SpacialBasisSet):
+class BSplineSpatialBasisSet(SpatialBasisSet):
     def __init__(
             self, 
             domain: Union[Sequence[float], np.ndarray, Quantity],

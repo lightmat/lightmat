@@ -11,11 +11,12 @@ from astropy.units import Quantity
 from typing import Union, Sequence
 
 from .particle_props import ParticleProps
+from .spatial_basis import SpatialBasisSet, GridSpatialBasisSet
 
 class FermiGas:
     """
     The FermiGas class is designed to model and analyze the properties of a Fermi Gas. It allows for the 
-    calculation of the spacial density of weakly interacting fermions at low temperatures by solving the 
+    calculation of the spatial density of weakly interacting fermions at low temperatures by solving the 
     single-particle eigenvalue problem and applies the Fermi-Dirac distribution. It also fixes the chemical 
     potential to ensure the normalization to a specific particle number.
 
@@ -50,8 +51,9 @@ class FermiGas:
     def __init__(
             self, 
             particle_props: ParticleProps,
-            num_grid_points: Union[int, Sequence[int], np.ndarray] = [101, 101, 101],
+            spatial_basis_set: Union[SpatialBasisSet, str] = 'grid',
             init_with_zero_T: bool = True,
+            **basis_set_kwargs,
         ):
         """Initialize FermiGas class. Make sure to use the correct units as specified below!!! If you are 
            using astropy units, you can use units that are equilvalent to the ones specified below.
@@ -73,28 +75,29 @@ class FermiGas:
         else:
             raise TypeError('particle_props must be a ParticleProps object')
 
-        # Initialize the spacial grid
-        if isinstance(num_grid_points, int):
-            self.num_grid_points = (num_grid_points, num_grid_points, num_grid_points)
-        elif isinstance(num_grid_points, (Sequence, np.ndarray)):
-            if len(num_grid_points) != 3:
-                raise ValueError("num_grid_points must be a sequence of length 3.")
-            if all(isinstance(n, int) for n in num_grid_points):
-                self.num_grid_points = tuple(num_grid_points)
+
+        if isinstance(spatial_basis_set, SpatialBasisSet):
+            if spatial_basis_set.domain == self.particle_props.domain:
+                self.spatial_basis_set = spatial_basis_set
             else:
-                raise ValueError("num_grid_points must be a sequence of integers.")
+                raise ValueError("spatial_basis_set must have the same domain as particle_props.domain.")
+        elif isinstance(spatial_basis_set, str):
+            if spatial_basis_set == 'grid':
+                num_grid_points = basis_set_kwargs.get('num_grid_points', 101) 
+                potential_function = basis_set_kwargs.get('potential_function', particle_props.V_trap)
+                self.spatial_basis_set = GridSpatialBasisSet(
+                    self.particle_props.domain, 
+                    num_grid_points,
+                    potential_function,
+                    )
+            else:
+                raise NotImplementedError("Only 'grid' is implemented so far.")
         else:
-            raise ValueError("num_grid_points must be an integer or a sequence of integers.")
-        self.x = np.linspace(self.particle_props.domain[0][0], self.particle_props.domain[0][1], self.num_grid_points[0]) 
-        self.y = np.linspace(self.particle_props.domain[1][0], self.particle_props.domain[1][1], self.num_grid_points[1])
-        self.z = np.linspace(self.particle_props.domain[2][0], self.particle_props.domain[2][1], self.num_grid_points[2])
-        self.dx = self.x[1] - self.x[0] # TODO: Generalize this to work for non-equidistant grids!
-        self.dy = self.y[1] - self.y[0]
-        self.dz = self.z[1] - self.z[0]
-        self.X, self.Y, self.Z = np.meshgrid(self.x, self.y, self.z, indexing='ij',)
+            raise TypeError("spatial_basis_set must be a SpatialBasisSet object or a string.")
+
 
         # Initialize the external trapping potential
-        self.V_trap_array = self.particle_props.V_trap(self.X.value, self.Y.value, self.Z.value)
+        self.V_trap_array = self.spatial_basis_set.get_coeffs(self.particle_props.V_trap)
         if isinstance(self.V_trap_array, Quantity):
             self.V_trap_array = self.V_trap_array.to(u.nK)
         else:
@@ -182,7 +185,7 @@ class FermiGas:
                 raise NotImplementedError("Only LDA is implemented so far.")
             
             # Update the particle number
-            self.N_particles = np.sum(self.n_array) * self.dx*self.dy*self.dz
+            self.N_particles = self.spatial_basis_set.integral(self.n_array)
 
             # Do soft update of the chemical potential mu based on normalization condition int dV n = N_particles.
             # This increases mu, if N_particles is too small w.r.t N_particles_target and decreases mu if N_particles is
@@ -265,7 +268,7 @@ class FermiGas:
         # Also, for increased numerical stability, we can rescale the integral to the interval 
         # [0,1] and integrate over the dimensionless variable q = p/p_cutoff instead of p.
         q_values = np.linspace(0, 1, num_q_values) 
-        q_values = q_values[:, np.newaxis, np.newaxis, np.newaxis] # reshape to broadcast with spacial grid later 
+        q_values = q_values[:, np.newaxis] # reshape to broadcast with spatial basis set later
 
         # Integrate using Simpson's rule (I chose this over quad() because quad() only works for scalar
         # integrands, but we have a 3d array of integrand values. So to use quad() we would need to loop
@@ -275,7 +278,7 @@ class FermiGas:
 
         # Check if integrand is zero at q=1 and integrate over q in the interval [0,1]
         max_integrand_val = np.max(integrand_values)
-        max_integrand_val_at_q1 = np.max(integrand_values[-1,:,:,:])
+        max_integrand_val_at_q1 = np.max(integrand_values[-1,:])
         if max_integrand_val_at_q1 > 1e-10 * max_integrand_val: # Check if integrand is not zero at q=1
             print("WARNING: Integrating until q=1, but integrand is not zero at q=1. Consider increasing cutoff_factor.")
         integral = simpson(integrand_values, q_values.flatten(), axis=0)
@@ -352,26 +355,30 @@ class FermiGas:
             self, 
             **kwargs,
         ):
-        """Plot the spacial density n(x,0,0), n(0,y,0) and n(0,0,z) along each direction respectively."""
+        """Plot the spatial density n(x,0,0), n(0,y,0) and n(0,0,z) along each direction respectively."""
         if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_array) > 0:
-            title = kwargs.get('title', 'Spacial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))  
+            title = kwargs.get('title', 'spatial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))  
             filename = kwargs.get('filename', None) 
 
             fig, axs = plt.subplots(1, 3, figsize=(14, 6))
             plt.subplots_adjust(top=0.85)
             fig.suptitle(title, fontsize=24)
 
-            axs[0].plot(self.x, self.n_array[:, self.num_grid_points[1]//2, self.num_grid_points[2]//2], c='k', marker='o', label=r'$n_{total}$')
+            x = np.linspace(self.particle_props.domain[0][0].value, self.particle_props.domain[0][1].value, 500)
+            y = np.linspace(self.particle_props.domain[1][0].value, self.particle_props.domain[1][1].value, 500)
+            z = np.linspace(self.particle_props.domain[2][0].value, self.particle_props.domain[2][1].value, 500)
+
+            axs[0].plot(x, self.spatial_basis_set.expand_coeffs(self.n_array, x, 0, 0), c='k', marker='o', label=r'$n_{total}$')
             axs[0].set_title(r'$n(x,0,0)$', fontsize=18)
             axs[0].set_xlabel(r'$x \; \left[\mu m\right]$', fontsize=14)
             axs[0].set_ylabel(r'$n(x,0,0) \; \left[\mu m^{-3}\right]$', fontsize=14)
 
-            axs[1].plot(self.y, self.n_array[self.num_grid_points[0]//2, :, self.num_grid_points[2]//2], c='k', marker='o', label=r'$n_{total}$')
+            axs[1].plot(y, self.spatial_basis_set.expand_coeffs(self.n_array, 0, y, 0), c='k', marker='o', label=r'$n_{total}$')
             axs[1].set_title(r'$n(0,y,0)$', fontsize=18)
             axs[1].set_xlabel(r'$y \; \left[\mu m\right]$', fontsize=14)
             axs[1].set_ylabel(r'$n(0,y,0) \; \left[\mu m^{-3}\right]$', fontsize=14)
 
-            axs[2].plot(self.z, self.n_array[self.num_grid_points[0]//2, self.num_grid_points[1]//2, :], c='k', marker='o', label=r'$n_{total}$')
+            axs[2].plot(z, self.spatial_basis_set.expand_coeffs(self.n_array, 0, 0, z), c='k', marker='o', label=r'$n_{total}$')
             axs[2].set_title(r'$n(0,0,z)$', fontsize=18)
             axs[2].set_xlabel(r'$z \; \left[\mu m\right]$', fontsize=14)
             axs[2].set_ylabel(r'$n(0,0,z) \; \left[\mu m^{-3}\right]$', fontsize=14)
@@ -391,7 +398,7 @@ class FermiGas:
                 axs[i].grid(True)
                 
             h, _ = axs[0].get_legend_handles_labels()  
-            labels = [r'$n_{total}$', r'$n_0$', r'$n_{ex}$', '$V_{trap}$']
+            labels = [r'$n_{total}$', '$V_{trap}$']
             fig.legend(h+line1, labels, loc='upper right', fontsize=14, fancybox=True, framealpha=0.9, bbox_to_anchor=(1, 1))  
 
             fig.tight_layout(rect=[0, 0, 0.95, 1])

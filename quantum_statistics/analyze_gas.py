@@ -10,11 +10,11 @@ from .fermi_gas import FermiGas
 
 
 def harmonic_trap(
-        x: Union[float, np.ndarray],
-        y: Union[float, np.ndarray],
-        z: Union[float, np.ndarray],
-        trap_depth: float = 200,
-        waist: float = 50,
+        x: Union[float, np.ndarray, Quantity],
+        y: Union[float, np.ndarray, Quantity],
+        z: Union[float, np.ndarray, Quantity],
+        trap_depth: Union[float, Quantity] = 200,
+        waist: Union[float, Quantity] = 50,
         inhomogenity: float = 0.01
     ) -> Union[float, np.ndarray]:
     """Return a harmonic trap potential in [k_B x nK] for given position(s) in [μm].
@@ -28,6 +28,16 @@ def harmonic_trap(
         Returns:
             V(x, y, z): harmonic trap potential in [k_B x nK], array of same shape as x, y, z
     """
+    if isinstance(x, Quantity) and x.unit.is_equivalent(u.um):
+        x = x.to(u.um).value
+    if isinstance(y, Quantity) and y.unit.is_equivalent(u.um):
+        y = y.to(u.um).value
+    if isinstance(z, Quantity) and z.unit.is_equivalent(u.um):
+        z = z.to(u.um).value
+    if isinstance(trap_depth, Quantity) and trap_depth.unit.is_equivalent(u.nK):
+        trap_depth = trap_depth.to(u.nK).value
+    if isinstance(waist, Quantity) and waist.unit.is_equivalent(u.um):
+        waist = waist.to(u.um).value
     # Create Gaussian profile
     r_squared = x**2 + y**2 + z**2
     gaussian_profile = np.exp(-2 * r_squared / waist**2)
@@ -41,11 +51,11 @@ def harmonic_trap(
 
 
 def box_trap(
-        x: Union[float, np.ndarray],
-        y: Union[float, np.ndarray],
-        z: Union[float, np.ndarray],
-        trap_depth: float = 200.,
-        box_width: Union[float, Sequence[float]] = (100., 100., 100.),
+        x: Union[float, np.ndarray, Quantity],
+        y: Union[float, np.ndarray, Quantity],
+        z: Union[float, np.ndarray, Quantity],
+        trap_depth: Union[float, Quantity] = 200.,
+        box_width: Union[float, Sequence[float], Quantity] = (100., 100., 100.),
         inhomogenity: float = 0.01
 ) -> Union[float, np.ndarray]:
     """Return a perfect box potential of depth `trap_depth` in [k_B x nK] for given position(s) in [μm].
@@ -61,6 +71,16 @@ def box_trap(
         Returns:
             V(x, y, z): box potential in [k_B x nK], array of same shape as x, y, z
     """
+    if isinstance(x, Quantity) and x.unit.is_equivalent(u.um):
+        x = x.to(u.um).value
+    if isinstance(y, Quantity) and y.unit.is_equivalent(u.um):
+        y = y.to(u.um).value
+    if isinstance(z, Quantity) and z.unit.is_equivalent(u.um):
+        z = z.to(u.um).value
+    if isinstance(trap_depth, Quantity) and trap_depth.unit.is_equivalent(u.nK):
+        trap_depth = trap_depth.to(u.nK).value
+    if isinstance(box_width, Quantity) and box_width.unit.is_equivalent(u.um):
+        box_width = box_width.to(u.um).value
     if isinstance(box_width, (int, float)):
         box_width = (box_width, box_width, box_width)
     # Check if the positions are within the box
@@ -77,12 +97,12 @@ def box_trap(
 
 
 def box_2d_harmonic_1d_trap(
-        x: Union[float, np.ndarray],
-        y: Union[float, np.ndarray],
-        z: Union[float, np.ndarray],
-        trap_depth: float = 200.,
-        box_width: Sequence[float] = (100., 100.),
-        waist: float = 50,
+        x: Union[float, np.ndarray, Quantity],
+        y: Union[float, np.ndarray, Quantity],
+        z: Union[float, np.ndarray, Quantity],
+        trap_depth: Union[float, Quantity] = 200.,
+        box_width: Union[Sequence[float], Quantity] = (100., 100.),
+        waist: Union[float, Quantity] = 50,
         inhomogenity: float = 0.01
 ) -> Union[float, np.ndarray]:
     """Return a potential of depth `trap_depth` in [k_B x nK] for given position(s) in [μm].
@@ -99,6 +119,20 @@ def box_2d_harmonic_1d_trap(
         Returns:
             V(x, y, z): box potential in [k_B x nK], array of same shape as x, y, z
     """
+    if isinstance(x, Quantity) and x.unit.is_equivalent(u.um):
+        x = x.to(u.um).value
+    if isinstance(y, Quantity) and y.unit.is_equivalent(u.um):
+        y = y.to(u.um).value
+    if isinstance(z, Quantity) and z.unit.is_equivalent(u.um):
+        z = z.to(u.um).value
+    if isinstance(trap_depth, Quantity) and trap_depth.unit.is_equivalent(u.nK):
+        trap_depth = trap_depth.to(u.nK).value
+    if isinstance(box_width, Quantity) and box_width.unit.is_equivalent(u.um):
+        box_width = box_width.to(u.um).value
+    if isinstance(waist, Quantity) and waist.unit.is_equivalent(u.um):
+        waist = waist.to(u.um).value
+    if isinstance(box_width, (int, float)):
+        box_width = (box_width, box_width)
     # Box in x-y plane
     in_box = (np.abs(x) <= box_width[0] / 2) & \
              (np.abs(y) <= box_width[1] / 2)
