@@ -15,6 +15,7 @@ class GridSpatialBasisSet(SpatialBasisSet):
             domain: Union[Sequence[float], np.ndarray, Quantity] = [(-100, 100), (-100, 100), (-100, 100)] * u.um,
             num_grid_points: Union[int, Sequence[int], np.ndarray] = (101, 101, 101),
             potential_function: Union[Callable, None] = None,
+            density_factor: int = 20,
         ):
         """Initialize a grid spatial basis set.
         
@@ -27,6 +28,8 @@ class GridSpatialBasisSet(SpatialBasisSet):
                                 axis. Default: (101, 101, 101)
                potential_function: Potential function to use for adaptive grid point creation. If None, an equidistant grid 
                                    is created. Default: None
+               density_factor: Factor to scale the density distribution of grid points if `potential_function` is not None.
+                               Default: 20
         """
         super().__init__()
 
@@ -36,7 +39,7 @@ class GridSpatialBasisSet(SpatialBasisSet):
         self._check_and_process_input("init")
 
         if self.potential_function is not None:
-            self.grid_points_x, self.grid_points_y, self.grid_points_z = self._create_adaptive_grid_points()
+            self.grid_points_x, self.grid_points_y, self.grid_points_z = self._create_adaptive_grid_points(density_factor)
         else:
             self.grid_points_x = np.linspace(self.domain[0, 0], self.domain[0, 1], self.num_grid_points[0]) * u.um
             self.grid_points_y = np.linspace(self.domain[1, 0], self.domain[1, 1], self.num_grid_points[1]) * u.um
@@ -60,11 +63,13 @@ class GridSpatialBasisSet(SpatialBasisSet):
                f (Callable): Function to calculate the coefficients for.
 
            Returns:
-               coeffs (ndarray): 1d array of coefficients for each basis function.
+               coeffs (ndarray): 1d array of coefficients for each basis function, shape (num_basis_funcs,).
         """
-        # Calculate the function values at each grid point
-        f_vals = f(self.grid_points[:, 0], self.grid_points[:, 1], self.grid_points[:, 2])
-        return f_vals # Shape: (num_basis_funcs,)
+        self.f = f
+        self._check_and_process_input("get_coeffs")
+
+        f_vals = self.f(self.grid_points[:, 0], self.grid_points[:, 1], self.grid_points[:, 2]) # func vals at each grid point
+        return f_vals 
     
 
     def expand_coeffs(
@@ -86,11 +91,13 @@ class GridSpatialBasisSet(SpatialBasisSet):
            Returns:
                Evaluated function at the given position(s) as array of same shape as x, y, and z.
         """
-        # Convert inputs to numpy arrays for vectorized operations
-        x = np.asarray(x)
-        y = np.asarray(y)
-        z = np.asarray(z)
+        self.coeffs = coeffs
+        self.x = x
+        self.y = y
+        self.z = z
+        self._check_and_process_input("expand_coeffs")
 
+        # Ensure that x, y, and z are within the domain
         if np.min(x) < self.domain[0, 0] or np.max(x) > self.domain[0, 1]:
             raise ValueError(f"x coordinate(s) must be within the x domain [{self.domain[0, 0]}, {self.domain[0, 1]}].")
         if np.min(y) < self.domain[1, 0] or np.max(y) > self.domain[1, 1]:
@@ -102,9 +109,9 @@ class GridSpatialBasisSet(SpatialBasisSet):
         mid_points_x = (self.grid_points_x[:-1] + self.grid_points_x[1:]) / 2
         mid_points_y = (self.grid_points_y[:-1] + self.grid_points_y[1:]) / 2
         mid_points_z = (self.grid_points_z[:-1] + self.grid_points_z[1:]) / 2
-        idx_x = np.digitize(x, mid_points_x.value)
-        idx_y = np.digitize(y, mid_points_y.value)
-        idx_z = np.digitize(z, mid_points_z.value)
+        idx_x = np.digitize(self.x, mid_points_x.value)
+        idx_y = np.digitize(self.y, mid_points_y.value)
+        idx_z = np.digitize(self.z, mid_points_z.value)
 
         # Retrieve corresponding coefficients (assuming coeffs is a flattened array of the 3D grid)
         coeffs_values = coeffs[idx_x * self.num_grid_points[1] * self.num_grid_points[2] +
@@ -112,6 +119,28 @@ class GridSpatialBasisSet(SpatialBasisSet):
                                idx_z]
         return coeffs_values
         
+
+    def power(
+            self,
+            coeffs: ndarray,
+            exponent: float,
+    )-> ndarray:
+        """Calculate the power of the function f expanded in the basis set.
+            
+           Args:
+               exponent (float): Exponent to calculate the power for.
+               coeffs (ndarray): 1d array of coefficients for each basis function.
+               
+           Returns:
+               power (ndarray): 1d array of the coefficients for each basis function representing f**exponent.
+        """
+        if not isinstance(exponent, (float, int)): 
+            raise TypeError("exponent must be a float or int.")
+        self.coeffs = coeffs
+        self._check_and_process_input("gradient")
+
+        return self.coeffs**exponent # possible because grid basis funcs don't overlap
+
 
     def gradient(
             self, 
@@ -125,8 +154,11 @@ class GridSpatialBasisSet(SpatialBasisSet):
            Returns:
                gradient (ndarray): 3d array of the gradient coefficients for each basis function.
         """
+        self.coeffs = coeffs
+        self._check_and_process_input("gradient")
+
         # Reshape coeffs into a 3D array
-        coeffs_3d = coeffs.reshape((self.num_grid_points[0], self.num_grid_points[1], self.num_grid_points[2]))
+        coeffs_3d = self.coeffs.reshape((self.num_grid_points[0], self.num_grid_points[1], self.num_grid_points[2]))
 
         # Calculate gradients
         if self.potential_function is None: # equidistant grid
@@ -140,8 +172,21 @@ class GridSpatialBasisSet(SpatialBasisSet):
         # Combine gradients into a single array
         gradient = np.stack(gradients, axis=-1)
 
-        return gradient.reshape((self.num_basis_funcs, 3))
+        # Flatten the gradient to return a 1D array and make sure to correct the unit (gradient is in coeffs.unit * 1/um)
+        assert self.grid_points_x.unit == self.grid_points_y.unit == self.grid_points_z.unit == u.um
+        return gradient.reshape((self.num_basis_funcs, 3)) * 1/u.um
     
+
+    def gradient_dot_gradient(
+            self,
+            coeffs,
+    ) -> ndarray:
+        self.coeffs = coeffs
+        self._check_and_process_input("gradient")
+
+        grad = self.gradient(self.coeffs)
+        return np.sum(np.square(grad), axis=1)
+
 
     def laplacian(
             self,
@@ -155,8 +200,11 @@ class GridSpatialBasisSet(SpatialBasisSet):
            Returns:
                laplacian (ndarray): 1d array of the laplacian coefficients for each basis function.
         """
+        self.coeffs = coeffs
+        self._check_and_process_input("gradient")
+
         # Reshape coeffs into a 3D array
-        coeffs_3d = coeffs.reshape((self.num_grid_points[0], self.num_grid_points[1], self.num_grid_points[2]))
+        coeffs_3d = self.coeffs.reshape((self.num_grid_points[0], self.num_grid_points[1], self.num_grid_points[2]))
 
         # Calculate second derivatives
         if self.potential_function is None:  # equidistant grid
@@ -174,8 +222,9 @@ class GridSpatialBasisSet(SpatialBasisSet):
         # The laplacian is the sum of the second derivatives in each direction
         laplacian_coeffs = d2x + d2y + d2z
 
-        # Flatten the laplacian to return a 1D array
-        return laplacian_coeffs.ravel()
+        # Flatten the laplacian to return a 1D array and make sure to correct the unit (laplacian is in coeffs.unit * 1/um**2)
+        assert self.grid_points_x.unit == self.grid_points_y.unit == self.grid_points_z.unit == u.um
+        return laplacian_coeffs.ravel() * 1/u.um**2
     
 
     def integral(
@@ -190,7 +239,9 @@ class GridSpatialBasisSet(SpatialBasisSet):
            Returns:
                integral (float): Integral of the function.
         """
-        return np.sum(coeffs * self.volumes)
+        self.coeffs = coeffs
+        self._check_and_process_input("gradient")
+        return np.sum(self.coeffs * self.volumes)
 
 
     def _calculate_volumes(
@@ -310,3 +361,62 @@ class GridSpatialBasisSet(SpatialBasisSet):
                 self.potential_function = self.potential_function
             else:
                 raise TypeError("potential_function must be a Callable or None.")
+            
+
+        elif which_method == "get_coeffs":
+            # Check that the function f is a Callable
+            if not isinstance(self.f, Callable):
+                raise TypeError("f must be a Callable.")
+            
+
+        elif which_method == "expand_coeffs" or which_method == "gradient":
+            # Check that the coeffs is a 1d ndarray
+            unit = 1
+            if isinstance(self.coeffs, Quantity):
+                unit = self.coeffs.unit
+                self.coeffs = self.coeffs.value
+            if isinstance(self.coeffs, (Sequence, ndarray)) and len(self.coeffs) == self.num_basis_funcs:
+                if all(isinstance(c, (float, int)) for c in self.coeffs):
+                    self.coeffs = np.asarray(self.coeffs) * unit
+                else:
+                    raise TypeError("coeffs must be a 1d sequence of length num_basis_funcs.")
+            else:
+                raise TypeError("coeffs must be a 1d sequence of length num_basis_funcs.")
+            
+            if which_method == "expand_coeffs":
+                # Check x, y, and z
+                if isinstance(self.x, Quantity):
+                    if self.x.unit.is_equivalent(u.um):
+                        self.x = self.x.to(u.um).value
+                    else:
+                        raise u.UnitsError("x must be in units of length.")
+                if isinstance(self.x, (float, int)):
+                    self.x = np.atleast_1d(self.x)
+                elif isinstance(self.x, (Sequence, np.ndarray)):
+                    self.x = np.asarray(self.x)
+                else:
+                    raise TypeError("x must be float or sequence of floats.")
+
+                if isinstance(self.y, Quantity):
+                    if self.y.unit.is_equivalent(u.um):
+                        self.y = self.y.to(u.um).value
+                    else:
+                        raise u.UnitsError("y must be in units of length.")
+                if isinstance(self.y, (float, int)):
+                    self.y = np.atleast_1d(self.y)
+                elif isinstance(self.y, (Sequence, np.ndarray)):
+                    self.y = np.asarray(self.y)
+                else:
+                    raise TypeError("y must be float or sequence of floats.")
+
+                if isinstance(self.z, Quantity):
+                    if self.z.unit.is_equivalent(u.um):
+                        self.z = self.z.to(u.um).value
+                    else:
+                        raise u.UnitsError("z must be in units of length.")
+                if isinstance(self.z, (float, int)):
+                    self.z = np.atleast_1d(self.z)
+                elif isinstance(self.z, (Sequence, np.ndarray)):
+                    self.z = np.asarray(self.z)
+                else:
+                    raise TypeError("z must be float or sequence of floats.")

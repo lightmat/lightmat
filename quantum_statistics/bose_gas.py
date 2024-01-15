@@ -10,6 +10,7 @@ from astropy.units import Quantity
 from typing import Union, Sequence
 
 from .particle_props import ParticleProps
+from .spatial_basis import SpatialBasisSet, GridSpatialBasisSet
 
 class BoseGas:
     """
@@ -59,8 +60,9 @@ class BoseGas:
     def __init__(
             self, 
             particle_props: ParticleProps,
-            num_grid_points: Union[int, Sequence[int], np.ndarray] = [101, 101, 101],
+            spatial_basis_set: Union[SpatialBasisSet, str] = 'grid',
             init_with_zero_T: bool = True,
+            **basis_set_kwargs,
         ):
         """Initialize BEC class. Make sure to use the correct units as specified below!!! If you are 
            using astropy units, you can use units that are equilvalent to the ones specified below.
@@ -73,37 +75,13 @@ class BoseGas:
                                                                number of grid points in each dimension. Defaults to 101.
                init_with_zero_T (bool): If True, run a zero-temperature calculation to improve initial guess for `mu`.
         """
-        # Initialize particle properties
-        if isinstance(particle_props, ParticleProps):
-            if particle_props.species == 'boson':
-                self.particle_props = particle_props
-            else:
-                raise ValueError('particle_props must be a boson ParticleProps object')
-        else:
-            raise TypeError('particle_props must be a ParticleProps object')
-
-        # Initialize the spacial grid
-        if isinstance(num_grid_points, int):
-            self.num_grid_points = (num_grid_points, num_grid_points, num_grid_points)
-        elif isinstance(num_grid_points, (Sequence, np.ndarray)):
-            if len(num_grid_points) != 3:
-                raise ValueError("num_grid_points must be a sequence of length 3.")
-            if all(isinstance(n, int) for n in num_grid_points):
-                self.num_grid_points = tuple(num_grid_points)
-            else:
-                raise ValueError("num_grid_points must be a sequence of integers.")
-        else:
-            raise ValueError("num_grid_points must be an integer or a sequence of integers.")
-        self.x = np.linspace(self.particle_props.domain[0][0], self.particle_props.domain[0][1], self.num_grid_points[0]) 
-        self.y = np.linspace(self.particle_props.domain[1][0], self.particle_props.domain[1][1], self.num_grid_points[1])
-        self.z = np.linspace(self.particle_props.domain[2][0], self.particle_props.domain[2][1], self.num_grid_points[2])
-        self.dx = self.x[1] - self.x[0] # TODO: Generalize this to work for non-equidistant grids!
-        self.dy = self.y[1] - self.y[0]
-        self.dz = self.z[1] - self.z[0]
-        self.X, self.Y, self.Z = np.meshgrid(self.x, self.y, self.z, indexing='ij',)
-
+        self.particle_props = particle_props
+        self.spatial_basis_set = spatial_basis_set
+        self.basis_set_kwargs = basis_set_kwargs
+        self._check_and_process_input("init")
+        
         # Initialize the external trapping potential
-        self.V_trap_array = self.particle_props.V_trap(self.X.value, self.Y.value, self.Z.value)
+        self.V_trap_array = self.spatial_basis_set.get_coeffs(self.particle_props.V_trap)
         if isinstance(self.V_trap_array, Quantity):
             self.V_trap_array = self.V_trap_array.to(u.nK)
         else:
@@ -196,7 +174,7 @@ class BoseGas:
         for iteration in iterator: 
             # Initialize n_ex_array with zeros in first iteration
             if iteration == 0:
-                    self.n_ex_array = np.zeros(self.num_grid_points) * 1/u.um**3
+                    self.n_ex_array = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**3
 
             # Update condensed density n0
             if self.use_TF:
@@ -213,9 +191,9 @@ class BoseGas:
             self.n_array = self.n0_array + self.n_ex_array
 
             # Update the particle numbers
-            self.N_particles = np.sum(self.n_array) * self.dx*self.dy*self.dz
-            self.N_particles_condensed = np.sum(self.n0_array) * self.dx*self.dy*self.dz
-            self.N_particles_thermal = np.sum(self.n_ex_array) * self.dx*self.dy*self.dz
+            self.N_particles = self.spatial_basis_set.integral(self.n_array)
+            self.N_particles_condensed = self.spatial_basis_set.integral(self.n0_array)
+            self.N_particles_thermal = self.spatial_basis_set.integral(self.n_ex_array)
             self.condensate_fraction = self.N_particles_condensed / self.N_particles
 
             # Do soft update of the chemical potential mu based on normalization condition int dV (n0 + nex) = N_particles.
@@ -256,7 +234,6 @@ class BoseGas:
                 else: # If not oscillating, increase the change rate to speed up convergence
                     mu_change_rate *= 2 
 
-
             # Check convergence criterion
             if delta_mu_value < mu_convergence_threshold*np.abs(self.mu.value) and \
                np.abs(self.particle_props.N_particles-self.N_particles) < N_convergence_threshold*self.particle_props.N_particles:
@@ -278,10 +255,8 @@ class BoseGas:
            density is physically meaningless.
         """
         # Calculate n0 with current chemical potential 
-        #mask = self.mu > (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array)
-        #self.n0_array = np.zeros_like(self.V_trap_array) 
-        #self.n0_array[mask] = (self.mu - (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array))[mask] / self.particle_props.g
-        self.n0_array = np.maximum((self.mu - (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array)) / self.particle_props.g, 0)
+        self.n0_array = np.maximum((self.mu - (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array)) \
+                                    / self.particle_props.g, 0)
 
 
     def _update_n0_by_solving_generalized_GPE(self,):
@@ -313,7 +288,7 @@ class BoseGas:
         # Also, for increased numerical stability, we can rescale the integral to the interval 
         # [0,1] and integrate over the dimensionless variable q = p/p_cutoff instead of p.
         q_values = np.linspace(0, 1, num_q_values) 
-        q_values = q_values[:, np.newaxis, np.newaxis, np.newaxis] # reshape to broadcast with spacial grid later 
+        q_values = q_values[:, np.newaxis] # reshape to broadcast with spacial grid later 
 
         # Integrate using Simpson's rule (I chose this over quad() because quad() only works for scalar
         # integrands, but we have a 3d array of integrand values. So to use quad() we would need to loop
@@ -326,7 +301,7 @@ class BoseGas:
 
         # Check if integrand is zero at q=1 and integrate over q in the interval [0,1]
         max_integrand_val = np.max(integrand_values)
-        max_integrand_val_at_q1 = np.max(integrand_values[-1,:,:,:])
+        max_integrand_val_at_q1 = np.max(integrand_values[-1,:])
         if max_integrand_val_at_q1 > 1e-10 * max_integrand_val: # Check if integrand is not zero at q=1
             print("WARNING: Integrating until q=1, but integrand is not zero at q=1. Consider increasing cutoff_factor.")
         integral = simpson(integrand_values, q_values.flatten(), axis=0)
@@ -358,7 +333,8 @@ class BoseGas:
 
         # Calculation of eps_p(r) in semiclassical HF approximation (eq. 8.115). Note, that even if we use 
         # the TF approximation for n0, we still need to incorporate the kinetic energy term for the excited states!
-        eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + 2*self.particle_props.g*(self.n0_array + self.n_ex_array)
+        eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + \
+                 2*self.particle_props.g*(self.n0_array + self.n_ex_array)
 
         return p_cutoff.value*4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) - 1) 
 
@@ -391,7 +367,8 @@ class BoseGas:
         # Calculation of eps_p(r) in semiclassical Popov approximation (eq. 8.119). Note, that even if we use 
         # the TF approximation for n0, we still need to incorporate the kinetic energy term for the excited states!
         eps_p = np.sqrt(np.maximum(((p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + \
-                        2*self.particle_props.g*(self.n0_array + self.n_ex_array) - self.mu)**2 - (self.particle_props.g*self.n0_array)**2, 0))
+                        2*self.particle_props.g*(self.n0_array + self.n_ex_array) - self.mu)**2 - \
+                        (self.particle_props.g*self.n0_array)**2, 0))
 
         num_non_condensed = ((p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + \
                               2*self.particle_props.g*(self.n0_array + self.n_ex_array) - self.mu) / eps_p
@@ -442,6 +419,7 @@ class BoseGas:
 
     def plot_density_1d(
             self, 
+            num_points: int = 200,
             **kwargs,
         ):
         """Plot the spacial density n(x,0,0), n(0,y,0) and n(0,0,z) along each direction respectively."""
@@ -453,23 +431,39 @@ class BoseGas:
             plt.subplots_adjust(top=0.85)
             fig.suptitle(title, fontsize=24)
 
-            axs[0].plot(self.x, self.n_array[:, self.num_grid_points[1]//2, self.num_grid_points[2]//2], c='k', marker='o', label=r'$n_{total}$')
-            axs[0].plot(self.x, self.n0_array[:, self.num_grid_points[1]//2, self.num_grid_points[2]//2], c='b', marker='o', label=r'$n_0$')
-            axs[0].plot(self.x, self.n_ex_array[:, self.num_grid_points[1]//2, self.num_grid_points[2]//2], c='g', marker='o', label=r'$n_{ex}$')
+            x = np.linspace(self.particle_props.domain[0][0].value, self.particle_props.domain[0][1].value, num_points)
+            y = np.linspace(self.particle_props.domain[1][0].value, self.particle_props.domain[1][1].value, num_points)
+            z = np.linspace(self.particle_props.domain[2][0].value, self.particle_props.domain[2][1].value, num_points)
+
+            nx = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, x, 0, 0))
+            n0x = self._check_n(self.spatial_basis_set.expand_coeffs(self.n0_array, x, 0, 0))
+            n_exx = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_ex_array, x, 0, 0))
+
+            ny = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, 0, y, 0))
+            n0y = self._check_n(self.spatial_basis_set.expand_coeffs(self.n0_array, 0, y, 0))
+            n_exy = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_ex_array, 0, y, 0))
+
+            nz = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, 0, 0, z))
+            n0z = self._check_n(self.spatial_basis_set.expand_coeffs(self.n0_array, 0, 0, z))
+            n_exz = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_ex_array, 0, 0, z))
+
+            axs[0].plot(x, nx, c='k', marker='o', label=r'$n_{total}$')
+            axs[0].plot(x, n0x, c='b', marker='o', label=r'$n_0$')
+            axs[0].plot(x, n_exx, c='g', marker='o', label=r'$n_{ex}$')
             axs[0].set_title(r'$n(x,0,0)$', fontsize=18)
             axs[0].set_xlabel(r'$x \; \left[\mu m\right]$', fontsize=14)
             axs[0].set_ylabel(r'$n(x,0,0) \; \left[\mu m^{-3}\right]$', fontsize=14)
 
-            axs[1].plot(self.y, self.n_array[self.num_grid_points[0]//2, :, self.num_grid_points[2]//2], c='k', marker='o', label=r'$n_{total}$')
-            axs[1].plot(self.y, self.n0_array[self.num_grid_points[0]//2, :, self.num_grid_points[2]//2], c='b', marker='o', label=r'$n_0$')
-            axs[1].plot(self.y, self.n_ex_array[self.num_grid_points[0]//2, :, self.num_grid_points[2]//2], c='g', marker='o', label=r'$n_{ex}$')
+            axs[1].plot(y, ny, c='k', marker='o', label=r'$n_{total}$')
+            axs[1].plot(y, n0y, c='b', marker='o', label=r'$n_0$')
+            axs[1].plot(y, n_exy, c='g', marker='o', label=r'$n_{ex}$')
             axs[1].set_title(r'$n(0,y,0)$', fontsize=18)
             axs[1].set_xlabel(r'$y \; \left[\mu m\right]$', fontsize=14)
             axs[1].set_ylabel(r'$n(0,y,0) \; \left[\mu m^{-3}\right]$', fontsize=14)
 
-            axs[2].plot(self.z, self.n_array[self.num_grid_points[0]//2, self.num_grid_points[1]//2, :], c='k', marker='o', label=r'$n_{total}$')
-            axs[2].plot(self.z, self.n0_array[self.num_grid_points[0]//2, self.num_grid_points[1]//2, :], c='b', marker='o', label=r'$n_0$')
-            axs[2].plot(self.z, self.n_ex_array[self.num_grid_points[0]//2, self.num_grid_points[1]//2, :], c='g', marker='o', label=r'$n_{ex}$')
+            axs[2].plot(z, nz, c='k', marker='o', label=r'$n_{total}$')
+            axs[2].plot(z, n0z, c='b', marker='o', label=r'$n_0$')
+            axs[2].plot(z, n_exz, c='g', marker='o', label=r'$n_{ex}$')
             axs[2].set_title(r'$n(0,0,z)$', fontsize=18)
             axs[2].set_xlabel(r'$z \; \left[\mu m\right]$', fontsize=14)
             axs[2].set_ylabel(r'$n(0,0,z) \; \left[\mu m^{-3}\right]$', fontsize=14)
@@ -477,11 +471,11 @@ class BoseGas:
             for i in range(3):
                 ax2 = axs[i].twinx()  # Create a secondary y-axis for potential
                 if i == 0:
-                    line1 = ax2.plot(self.x, self.V_trap_array[:, self.num_grid_points[1]//2, self.num_grid_points[2]//2], 'r--', label=r'$V_{trap}$')  
+                    line1 = ax2.plot(x, self.particle_props.V_trap(x, 0, 0), 'r--', label=r'$V_{trap}$')  
                 elif i == 1:
-                    ax2.plot(self.y, self.V_trap_array[self.num_grid_points[0]//2, :, self.num_grid_points[2]//2], 'r--', label=r'$V_{trap}$')
+                    ax2.plot(y, self.particle_props.V_trap(0, y, 0), 'r--', label=r'$V_{trap}$')
                 elif i == 2:
-                    ax2.plot(self.z, self.V_trap_array[self.num_grid_points[0]//2, self.num_grid_points[1]//2, :], 'r--', label=r'$V_{trap}$')
+                    ax2.plot(z, self.particle_props.V_trap(0, 0, z), 'r--', label=r'$V_{trap}$')
                 
                 ax2.set_ylabel(r'$V_{trap} \; \left[ nK \right]$', color='r', fontsize=14)  
                 ax2.tick_params(axis='y', labelcolor='r')  
@@ -503,7 +497,11 @@ class BoseGas:
 
 
 
-    def plot_density_2d(self, which: str = 'all', **kwargs):
+    def plot_density_2d(
+            self, 
+            which: str = 'all', 
+            num_points: int = 200,
+            **kwargs):
         """Plot the spatial density n(x,y,0), n(x,0,z) and n(0,y,z) along two directions respectively.
         
         Args:
@@ -520,26 +518,34 @@ class BoseGas:
             gs.update(wspace=0.65)
             fig.suptitle(title, fontsize=24, y=0.94)
 
+            x = np.linspace(self.particle_props.domain[0][0].value, self.particle_props.domain[0][1].value, num_points)
+            y = np.linspace(self.particle_props.domain[1][0].value, self.particle_props.domain[1][1].value, num_points)
+            z = np.linspace(self.particle_props.domain[2][0].value, self.particle_props.domain[2][1].value, num_points)
+
             # Function to create plots for a given density array
             def create_plots(density_array, row_idx, density_label):
                 for j in range(3):
                     ax = plt.subplot(gs[row_idx, j])
                     # Determine the 2D slice based on the subplot
                     if j == 0:  # x-y plane
-                        slice_2d = density_array[:, :, self.num_grid_points[2]//2].value
-                        im = ax.imshow(slice_2d, extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.z[-1].value], \
-                                       origin='lower')
+                        X, Y = np.meshgrid(x, y)
+                        slice_2d = self._check_n(self.spatial_basis_set.expand_coeffs(density_array, X, Y, 0))
+                        im = ax.pcolormesh(x, y, slice_2d)
+                        title = f'{density_label}(x, y, 0)'
                     elif j == 1:  # x-z plane
-                        slice_2d = density_array[:, self.num_grid_points[1]//2, :].value
-                        im = ax.imshow(slice_2d, extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value], \
-                                       origin='lower')
+                        X, Z = np.meshgrid(x, z)
+                        slice_2d = self._check_n(self.spatial_basis_set.expand_coeffs(density_array, X, 0, Z))
+                        im = ax.pcolormesh(x, z, slice_2d)
+                        title = f'{density_label}(x, 0, z)'
                     else:  # y-z plane
-                        slice_2d = density_array[self.num_grid_points[0]//2, :, :].value
-                        im = ax.imshow(slice_2d, extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value], \
-                                       origin='lower')
+                        Y, Z = np.meshgrid(y, z)
+                        slice_2d = self._check_n(self.spatial_basis_set.expand_coeffs(density_array, 0, Y, Z))
+                        im = ax.pcolormesh(y, z, slice_2d)
+                        title = f'{density_label}(0, y, z)'
+                    ax.set_aspect('equal', adjustable='box')
 
                     # Plotting
-                    ax.set_title(f'${density_label}({", ".join("xyz"[k] if k == j else "0" for k in range(3))})$', fontsize=18)
+                    ax.set_title(title, fontsize=18)
                     ax.set_xlabel(f'{["y", "z", "x"][j]} [μm]', fontsize=12)
                     ax.set_ylabel(f'{["x", "y", "z"][j]} [μm]', fontsize=12)
 
@@ -580,3 +586,47 @@ class BoseGas:
         a = self.plot_convergence_history()
         b = self.plot_density_1d()
         c = self.plot_density_2d(which)
+
+
+    def _check_n(
+            self,
+            n: Union[np.ndarray, Quantity],
+    ):
+        if isinstance(n, Quantity):
+            if n.unit.is_equivalent(1/u.um**3):
+                n = n.to(1/u.um**3).value
+            else:
+                raise ValueError("n has to be in units equivalent to 1/um**3 if it is a Quantity.")
+        return n
+
+
+    def _check_and_process_input(
+            self,
+            which_method: str,
+    ):
+        if which_method == "init":
+            # Initialize particle properties
+            if isinstance(self.particle_props, ParticleProps):
+                if self.particle_props.species != 'boson':
+                    raise ValueError('particle_props must be a boson ParticleProps object')
+            else:
+                raise TypeError('particle_props must be a ParticleProps object')
+
+
+            if isinstance(self.spatial_basis_set, SpatialBasisSet):
+                if self.spatial_basis_set.domain != self.particle_props.domain:
+                    self.spatial_basis_set.domain = self.particle_props.domain
+                    print("WARNING: spatial_basis_set domain was set to particle_props.domain.")
+            elif isinstance(self.spatial_basis_set, str):
+                if self.spatial_basis_set == 'grid':
+                    num_grid_points = self.basis_set_kwargs.get('num_grid_points', 101) 
+                    potential_function = self.basis_set_kwargs.get('potential_function', self.particle_props.V_trap)
+                    self.spatial_basis_set = GridSpatialBasisSet(
+                        self.particle_props.domain, 
+                        num_grid_points,
+                        potential_function,
+                        )
+                else:
+                    raise NotImplementedError("Only 'grid' is implemented so far.")
+            else:
+                raise TypeError("spatial_basis_set must be a SpatialBasisSet object or a string.")

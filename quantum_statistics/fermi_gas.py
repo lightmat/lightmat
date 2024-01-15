@@ -1,6 +1,7 @@
 import numpy as np
 import sparse
 from scipy.integrate import simpson
+from scipy.optimize import minimize
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -66,36 +67,11 @@ class FermiGas:
                                                                number of grid points in each dimension. Defaults to 101.
                init_with_zero_T (bool): If True, run a zero-temperature calculation to improve initial guess for `mu`.
         """
-        # Initialize particle properties
-        if isinstance(particle_props, ParticleProps):
-            if particle_props.species == 'fermion':
-                self.particle_props = particle_props
-            else:
-                raise ValueError('particle_props must be a fermion ParticleProps object')
-        else:
-            raise TypeError('particle_props must be a ParticleProps object')
-
-
-        if isinstance(spatial_basis_set, SpatialBasisSet):
-            if spatial_basis_set.domain == self.particle_props.domain:
-                self.spatial_basis_set = spatial_basis_set
-            else:
-                raise ValueError("spatial_basis_set must have the same domain as particle_props.domain.")
-        elif isinstance(spatial_basis_set, str):
-            if spatial_basis_set == 'grid':
-                num_grid_points = basis_set_kwargs.get('num_grid_points', 101) 
-                potential_function = basis_set_kwargs.get('potential_function', particle_props.V_trap)
-                self.spatial_basis_set = GridSpatialBasisSet(
-                    self.particle_props.domain, 
-                    num_grid_points,
-                    potential_function,
-                    )
-            else:
-                raise NotImplementedError("Only 'grid' is implemented so far.")
-        else:
-            raise TypeError("spatial_basis_set must be a SpatialBasisSet object or a string.")
-
-
+        self.particle_props = particle_props
+        self.spatial_basis_set = spatial_basis_set
+        self.basis_set_kwargs = basis_set_kwargs
+        self._check_and_process_input("init")
+        
         # Initialize the external trapping potential
         self.V_trap_array = self.spatial_basis_set.get_coeffs(self.particle_props.V_trap)
         if isinstance(self.V_trap_array, Quantity):
@@ -135,12 +111,9 @@ class FermiGas:
             print_convergence_info_at_this_iteration: int = 0,
             show_progress: bool = True,
         ):
-        """Run the iterative procedure to update in turn the densities `n_0_array` and `n_ex_array`. 
-        The procedure is repeated until the chemical potential is converged or the maximum number 
-        of iterations is reached. After running this method, the total density `n_array`, condensed 
-        density `n0_array` and non-condensed density `n_ex_array` have meaningful values if the 
-        convergence criterion was met. You can run `plot_convergence_history()` to see if you are 
-        satisfied with the convergence.
+        """Run the iterative procedure to update the density `n_array`. The procedure is repeated until
+           the chemical potential is converged or the maximum number of iterations is reached. You can 
+           run `plot_convergence_history()` to see if you are satisfied with the convergence.
         
            Args:
                use_LDA: if True, use the semiclassical LDA to update n, if False, use the Thomas-Fermi 
@@ -182,7 +155,7 @@ class FermiGas:
             elif self.use_LDA:
                 self._update_n_with_LDA(num_q_values, cutoff_factor)
             else:
-                raise NotImplementedError("Only LDA is implemented so far.")
+                self._update_n_with_E_functional_minimization()
             
             # Update the particle number
             self.N_particles = self.spatial_basis_set.integral(self.n_array)
@@ -237,7 +210,8 @@ class FermiGas:
         ):
         """Update the density `n_array` using the Thomas-Fermi approximation. The density is zero where the
            chemical potential is smaller than the external trapping potential. Else, the density is given by
-           the Thomas-Fermi approximation."""
+           the Thomas-Fermi approximation.
+        """
         mask = (self.mu - self.V_trap_array) >= 0
         self.n_array = np.zeros_like(self.V_trap_array.value)
         self.n_array[mask] = (1/(6*np.pi**2) * ((2*self.particle_props.m/(hbar**2) * k_B) * \
@@ -308,6 +282,59 @@ class FermiGas:
         p = q * p_cutoff
         eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array 
         return p_cutoff.value*4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) + 1) 
+    
+
+
+    def _update_n_with_E_functional_minimization(
+            self,
+        ):
+        E_min = minimize(self._E_functional, self.n_array, jac=self._E_functional_deriv,)
+        self.n_array = E_min.x
+
+
+
+    def _E_functional(
+            self,
+            n_array: np.ndarray,
+    )-> float:
+        Ekin1 = (6*np.pi**2)**(5/3)/(10*np.pi**2) * self.spatial_basis_set.integral(self.spatial_basis_set.power(n_array, 5/3)) 
+
+        # I assume that n(r) defines a boundary surface in 3d space where it becomes zero and that (grad(n(r)))**2 / n(r)
+        # is zero beyond that surface since the gradient becomes zero even at infinitesimal distances beyond the surface.
+        # Since the boundary surface is a null set it doesn't contribute to the integral. Thus, we can integrate only 
+        # over the region where n(r) is non-zero, i.e. mask out the region where n(r) is zero.
+        integrand = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**5
+        mask = n_array > 0
+        integrand[mask] = self.spatial_basis_set.gradient_dot_gradient(n_array)[mask] / n_array[mask]
+        Ekin2 = 1/36 * self.spatial_basis_set.integral(integrand)
+
+        Ekin3 = 1/3 * self.spatial_basis_set.integral(self.spatial_basis_set.laplacian(n_array))
+
+        Ekin = (hbar**2/(2*self.particle_props.m) * (Ekin1 + Ekin2 + Ekin3) / k_B).to(u.nK)
+
+        Epot = self.spatial_basis_set.integral(n_array * self.V_trap_array).to(u.nK)
+
+        return (Ekin + Epot)
+
+        
+
+    def _E_functional_deriv(
+            self,
+            n_array: np.ndarray,
+    ):
+        grad_Ekin1 = (6*np.pi**2)**(5/3)/(10*np.pi**2) * 5/3 * self.spatial_basis_set.power(n_array, 2/3)
+
+        grad_Ekin2 = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**2
+        mask = n_array > 0
+        grad_Ekin2[mask] = -1/36 * (self.spatial_basis_set.gradient_dot_gradient(n_array)[mask] \
+                                / self.spatial_basis_set.power(n_array, 2)[mask] + \
+                                2 * self.spatial_basis_set.laplacian(n_array)[mask] / n_array[mask])
+
+        grad_E = (hbar**2/(2*self.particle_props.m) * (grad_Ekin1 + grad_Ekin2) / k_B).to(u.nK)
+
+        return (grad_E + self.V_trap_array)
+        
+
 
 
     def plot_convergence_history(
@@ -353,6 +380,7 @@ class FermiGas:
 
     def plot_density_1d(
             self, 
+            num_points: int = 200,
             **kwargs,
         ):
         """Plot the spatial density n(x,0,0), n(0,y,0) and n(0,0,z) along each direction respectively."""
@@ -364,21 +392,25 @@ class FermiGas:
             plt.subplots_adjust(top=0.85)
             fig.suptitle(title, fontsize=24)
 
-            x = np.linspace(self.particle_props.domain[0][0].value, self.particle_props.domain[0][1].value, 500)
-            y = np.linspace(self.particle_props.domain[1][0].value, self.particle_props.domain[1][1].value, 500)
-            z = np.linspace(self.particle_props.domain[2][0].value, self.particle_props.domain[2][1].value, 500)
+            x = np.linspace(self.particle_props.domain[0][0].value, self.particle_props.domain[0][1].value, num_points)
+            y = np.linspace(self.particle_props.domain[1][0].value, self.particle_props.domain[1][1].value, num_points)
+            z = np.linspace(self.particle_props.domain[2][0].value, self.particle_props.domain[2][1].value, num_points)
 
-            axs[0].plot(x, self.spatial_basis_set.expand_coeffs(self.n_array, x, 0, 0), c='k', marker='o', label=r'$n_{total}$')
+            nx = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, x, 0, 0))
+            ny = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, 0, y, 0))
+            nz = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, 0, 0, z))
+
+            axs[0].plot(x, nx, c='k', marker='o', label=r'$n_{total}$')
             axs[0].set_title(r'$n(x,0,0)$', fontsize=18)
             axs[0].set_xlabel(r'$x \; \left[\mu m\right]$', fontsize=14)
             axs[0].set_ylabel(r'$n(x,0,0) \; \left[\mu m^{-3}\right]$', fontsize=14)
 
-            axs[1].plot(y, self.spatial_basis_set.expand_coeffs(self.n_array, 0, y, 0), c='k', marker='o', label=r'$n_{total}$')
+            axs[1].plot(y, ny, c='k', marker='o', label=r'$n_{total}$')
             axs[1].set_title(r'$n(0,y,0)$', fontsize=18)
             axs[1].set_xlabel(r'$y \; \left[\mu m\right]$', fontsize=14)
             axs[1].set_ylabel(r'$n(0,y,0) \; \left[\mu m^{-3}\right]$', fontsize=14)
 
-            axs[2].plot(z, self.spatial_basis_set.expand_coeffs(self.n_array, 0, 0, z), c='k', marker='o', label=r'$n_{total}$')
+            axs[2].plot(z, nz, c='k', marker='o', label=r'$n_{total}$')
             axs[2].set_title(r'$n(0,0,z)$', fontsize=18)
             axs[2].set_xlabel(r'$z \; \left[\mu m\right]$', fontsize=14)
             axs[2].set_ylabel(r'$n(0,0,z) \; \left[\mu m^{-3}\right]$', fontsize=14)
@@ -386,11 +418,11 @@ class FermiGas:
             for i in range(3):
                 ax2 = axs[i].twinx()  # Create a secondary y-axis for potential
                 if i == 0:
-                    line1 = ax2.plot(self.x, self.V_trap_array[:, self.num_grid_points[1]//2, self.num_grid_points[2]//2], 'r--', label=r'$V_{trap}$')  
+                    line1 = ax2.plot(x, self.particle_props.V_trap(x, 0, 0), 'r--', label=r'$V_{trap}$')  
                 elif i == 1:
-                    ax2.plot(self.y, self.V_trap_array[self.num_grid_points[0]//2, :, self.num_grid_points[2]//2], 'r--', label=r'$V_{trap}$')
+                    ax2.plot(y, self.particle_props.V_trap(0, y, 0), 'r--', label=r'$V_{trap}$')
                 elif i == 2:
-                    ax2.plot(self.z, self.V_trap_array[self.num_grid_points[0]//2, self.num_grid_points[1]//2, :], 'r--', label=r'$V_{trap}$')
+                    ax2.plot(z, self.particle_props.V_trap(0, 0, z), 'r--', label=r'$V_{trap}$')
                 
                 ax2.set_ylabel(r'$V_{trap} \; \left[ nK \right]$', color='r', fontsize=14)  
                 ax2.tick_params(axis='y', labelcolor='r')  
@@ -411,35 +443,52 @@ class FermiGas:
             print("No convergence history found. Please run eval_density() first.")
 
 
-    def plot_density_2d(self, **kwargs):
+    def plot_density_2d(
+            self, 
+            num_points: int = 200,
+            **kwargs
+        ):
         """Plot the spatial density n(x,y,0), n(x,0,z) and n(0,y,z) along two directions respectively."""
         if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_array) > 0:
             title = kwargs.get('title', 'Spatial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))
             filename = kwargs.get('filename', None)
 
             # Define the figure and GridSpec layout
-            fig = plt.figure(figsize=(17, 5))  # Adjusted figure size for 1 row
+            fig = plt.figure(figsize=(17, 5))  
             gs = gridspec.GridSpec(1, 4, width_ratios=[1, 1, 1, 0.05])  # 3 columns for plots, 1 for colorbars
-            gs.update(wspace=0.65)  # Adjust spacing if needed
+            gs.update(wspace=0.65)  
 
             # Create subplots
             axs = [plt.subplot(gs[0, i]) for i in range(3)]
-
             fig.suptitle(title, fontsize=24, y=0.94)
+
+            x = np.linspace(self.particle_props.domain[0][0].value, self.particle_props.domain[0][1].value, num_points)
+            y = np.linspace(self.particle_props.domain[1][0].value, self.particle_props.domain[1][1].value, num_points)
+            z = np.linspace(self.particle_props.domain[2][0].value, self.particle_props.domain[2][1].value, num_points)
+
+            X, Y = np.meshgrid(x, y)
+            nxy = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, X, Y, 0))
+
+            X, Z = np.meshgrid(x, z)
+            nxz = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, X, 0, Z))
+
+            Y, Z = np.meshgrid(y, z)
+            nyz = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, 0, Y, Z))        
 
             # Plotting n(x,y,0), n(x,0,z), n(0,y,z)
             im = []
-            im.append(axs[0].imshow(self.n_array[:, :, self.num_grid_points[2]//2].value, 
-                                    extent=[self.x[0].value, self.x[-1].value, self.y[0].value, self.y[-1].value], origin='lower'))
+            
+            im.append(axs[0].pcolormesh(x, y, nxy))
             axs[0].set_title(r'$n(x,y,0)$', fontsize=18)
+            axs[0].set_aspect('equal', adjustable='box')
 
-            im.append(axs[1].imshow(self.n_array[:, self.num_grid_points[1]//2, :].value, 
-                                    extent=[self.x[0].value, self.x[-1].value, self.z[0].value, self.z[-1].value], origin='lower'))
+            im.append(axs[1].pcolormesh(x, z, nxz))
             axs[1].set_title(r'$n(x,0,z)$', fontsize=18)
+            axs[1].set_aspect('equal', adjustable='box')
 
-            im.append(axs[2].imshow(self.n_array[self.num_grid_points[0]//2, :, :].value, 
-                                    extent=[self.y[0].value, self.y[-1].value, self.z[0].value, self.z[-1].value], origin='lower'))
+            im.append(axs[2].pcolormesh(y, z, nyz))
             axs[2].set_title(r'$n(0,y,z)$', fontsize=18)
+            axs[2].set_aspect('equal', adjustable='box')
 
             # Set labels and colorbars for each plot
             for i, ax in enumerate(axs):
@@ -460,10 +509,55 @@ class FermiGas:
             print("No convergence history found. Please run eval_density() first.")
 
 
+
     def plot_all(
             self,
     ):
         a = self.plot_convergence_history()
         b = self.plot_density_1d()
         c = self.plot_density_2d()
+
+
+    def _check_n(
+            self,
+            n: Union[np.ndarray, Quantity],
+    ):
+        if isinstance(n, Quantity):
+            if n.unit.is_equivalent(1/u.um**3):
+                n = n.to(1/u.um**3).value
+            else:
+                raise ValueError("n has to be in units equivalent to 1/um**3 if it is a Quantity.")
+        return n
+
+
+    def _check_and_process_input(
+            self,
+            which_method: str,
+    ):
+        if which_method == "init":
+            # Initialize particle properties
+            if isinstance(self.particle_props, ParticleProps):
+                if self.particle_props.species != 'fermion':
+                    raise ValueError('particle_props must be a fermion ParticleProps object')
+            else:
+                raise TypeError('particle_props must be a ParticleProps object')
+
+
+            if isinstance(self.spatial_basis_set, SpatialBasisSet):
+                if self.spatial_basis_set.domain != self.particle_props.domain:
+                    self.spatial_basis_set.domain = self.particle_props.domain
+                    print("WARNING: spatial_basis_set domain was set to particle_props.domain.")
+            elif isinstance(self.spatial_basis_set, str):
+                if self.spatial_basis_set == 'grid':
+                    num_grid_points = self.basis_set_kwargs.get('num_grid_points', 101) 
+                    potential_function = self.basis_set_kwargs.get('potential_function', self.particle_props.V_trap)
+                    self.spatial_basis_set = GridSpatialBasisSet(
+                        self.particle_props.domain, 
+                        num_grid_points,
+                        potential_function,
+                        )
+                else:
+                    raise NotImplementedError("Only 'grid' is implemented so far.")
+            else:
+                raise TypeError("spatial_basis_set must be a SpatialBasisSet object or a string.")
 
