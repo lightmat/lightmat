@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.integrate import simpson
 from scipy.optimize import minimize
+from scipy.optimize import line_search
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -96,15 +97,15 @@ class BoseGas:
         # But we don't want a position-dependent mu, so as an initial guess we take:
         self.mu = np.min(self.V_trap_array) + self.particle_props.g.value*(self.particle_props.N_particles**(1/3))*u.nK 
 
-        # Initialize the densities and particle numbers, which get assigned meaningful values after running 
-        # eval_density()
+        # Initialize the densities and particle numbers, which get assigned meaningful values after running eval_density()
+        self.n_ex_array = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**3
         self.n0_array = None
-        self.n_ex_array = None
-        self.n_array = None
-        self.N_particles = None
-        self.N_particles_condensed = None
-        self.N_particles_thermal = None
-        self.condensate_fraction = None
+        self._update_n0_with_TF_approximation()
+        self.n_array = self.n0_array + self.n_ex_array
+        self.N_particles = self.spatial_basis_set.integral(self.n_array)
+        self.N_particles_condensed = self.spatial_basis_set.integral(self.n0_array)
+        self.N_particles_thermal = self.spatial_basis_set.integral(self.n_ex_array)
+        self.condensate_fraction = self.N_particles_condensed / self.N_particles
 
         # Run a zero-temperature calculation to improve initial guess for `mu`. If the provided temperature is 
         # already zero, we don't run this in order to not disturb the workflow of always running eval_density() 
@@ -120,10 +121,10 @@ class BoseGas:
             self,
             use_TF: bool = True,
             use_HF: bool = True,
-            max_iter: int = 1000,
+            max_iter: int = 100,
             mu_convergence_threshold: float = 1e-5,
             N_convergence_threshold: float = 1e-3,
-            mu_change_rate: float = 0.01,
+            mu_change_rate: Union[float, None] = None,
             mu_change_rate_adjustment: int = 5,
             num_q_values: int = 50,
             cutoff_factor: float = 10,
@@ -172,14 +173,17 @@ class BoseGas:
         # Set up convergence history list for the plot_convergence_history() method
         self.convergence_history_mu = [self.mu.value]
         self.convergence_history_N = [self.N_particles]
+
+        # Store mu_change_rate (gets dynamically adjusted during iterative procedure to ensure convergence)
+        if mu_change_rate is not None:
+            self.mu_change_rate = mu_change_rate
+        else:
+            if not hasattr(self, 'mu_change_rate'):
+                self.mu_change_rate = 0.01
             
         # Run iterative procedure to update the densities
         iterator = tqdm(range(max_iter)) if show_progress else range(max_iter)
         for iteration in iterator: 
-            # Initialize n_ex_array with zeros in first iteration
-            if iteration == 0:
-                    self.n_ex_array = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**3
-
             # Update condensed density n0
             if self.use_TF:
                 self._update_n0_with_TF_approximation()
@@ -204,7 +208,7 @@ class BoseGas:
             # This increases mu, if N_particles is too small w.r.t N_particles_target and decreases mu if N_particles is
             # too large w.r.t. N_particles_target.
             new_mu_direction = (self.particle_props.N_particles - self.N_particles) / self.particle_props.N_particles * u.nK 
-            self.mu += mu_change_rate * new_mu_direction
+            self.mu += self.mu_change_rate * new_mu_direction
 
             # Calculate convergence info
             delta_mu_value = np.abs(self.mu.value - self.convergence_history_mu[-1]) 
@@ -221,7 +225,7 @@ class BoseGas:
                     print('mu: ', self.mu)
                     print('delta_mu: ', delta_mu_value)
                     print('new_mu_direction: ', new_mu_direction)
-                    print('mu_change_rate: ', mu_change_rate)
+                    print('mu_change_rate: ', self.mu_change_rate)
                     print("\n")
 
             # Dynamically adjust `mu_change_rate` based on recent changes
@@ -234,9 +238,9 @@ class BoseGas:
                         oscillating = True
                         break
                 if oscillating: # If oscillating, decrease the change rate to stabilize
-                    mu_change_rate *= 0.5 
+                    self.mu_change_rate *= 0.5 
                 else: # If not oscillating, increase the change rate to speed up convergence
-                    mu_change_rate *= 2 
+                    self.mu_change_rate *= 2 
 
             # Check convergence criterion
             if delta_mu_value < mu_convergence_threshold*np.abs(self.mu.value) and \
@@ -270,8 +274,35 @@ class BoseGas:
             self,
         ):
         assert self.n0_array.unit == 1/u.um**3, "n_array must be in units of 1/um**3."
-        E_min = minimize(self._E_functional, self.n0_array.value, jac=self._E_functional_deriv, method='CG')
-        self.n0_array = E_min.x * 1/u.um**3
+        #E_min = minimize(self._E_functional, self.n0_array.value, jac=self._E_functional_deriv, method='CG')
+        #self.n0_array = E_min.x * 1/u.um**3
+
+        # Current point (n0_array)
+        xk = self.n0_array.value
+
+        # Compute the gradient at the current point
+        gfk = self._E_functional_deriv(xk)
+
+        # Initialize or update the conjugate direction
+        if not hasattr(self, 'pk') or self.pk is None:
+            self.pk = -gfk  # First iteration, steepest descent direction
+        else:
+            # Polak-Ribiere-Powell formula for updating the search direction
+            yk = gfk - self.gfk_prev
+            beta_k = max(0, np.dot(yk, gfk) / np.dot(self.gfk_prev, self.gfk_prev))
+            self.pk = -gfk + beta_k * self.pk
+
+        # Save the current gradient for the next iteration
+        self.gfk_prev = gfk
+
+        # Perform a line search to find the optimal step size
+        alpha_k, _, _, _, _, _ = line_search(self._E_functional, self._E_functional_deriv, xk, self.pk, gfk)
+
+        if alpha_k is not None:
+            # Update the current point
+            xk += alpha_k * self.pk
+            self.n0_array = xk * 1/u.um**3
+        
 
 
 
@@ -302,13 +333,13 @@ class BoseGas:
         Epot = self.spatial_basis_set.integral(integrand_array).to(u.nK)
 
         # Fix particle number by adding Lagrange multiplier (chemical potential)
-        Echem = - self.mu * (self.particle_props.N_particles - self.spatial_basis_set.integral(n0_array))
+        #Echem = - self.mu * (self.particle_props.N_particles - self.spatial_basis_set.integral(n0_array + self.n_ex_array))
 
         # Return total energy
         if unitless:
-            return (Ekin + Epot + Echem).value
+            return (Ekin + Epot).value
         else:
-            return Ekin + Epot + Echem
+            return Ekin + Epot
 
         
 
@@ -338,13 +369,13 @@ class BoseGas:
             grad_Epot = grad_Epot + V_additional_array
 
         # Calculate functional derivative of the chemical potential term in the E functional w.r.t. n0(r)
-        grad_Echem = self.mu 
+        #grad_Echem = self.mu 
 
         # Return gradient of the total energy w.r.t. n0(r)
         if unitless:
-            return (grad_Ekin + grad_Epot + grad_Echem).value
+            return (grad_Ekin + grad_Epot).value
         else:
-            return grad_Ekin + grad_Epot + grad_Echem
+            return grad_Ekin + grad_Epot
 
 
 
