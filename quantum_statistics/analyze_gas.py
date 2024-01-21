@@ -46,6 +46,7 @@ def harmonic_trap(
     perfect_harmonic_trap = -trap_depth * gaussian_profile
 
     # Add noise
+    np.random.seed(42)
     noise = np.random.rand(*perfect_harmonic_trap.shape, ) * inhomogenity * trap_depth
     return perfect_harmonic_trap + noise
 
@@ -92,6 +93,7 @@ def box_trap(
     perfect_box = np.where(in_box, -trap_depth, 0.)
 
     # Add noise
+    np.random.seed(42)
     noise = np.random.rand(*perfect_box.shape) * inhomogenity * trap_depth
     return perfect_box + noise
 
@@ -145,6 +147,7 @@ def box_2d_harmonic_1d_trap(
     perfect_trap = - trap_depth * perfect_box * gaussian_profile
 
     # Add noise
+    np.random.seed(42)
     noise = np.random.rand(*perfect_trap.shape) * inhomogenity * trap_depth
     return perfect_trap + noise
 
@@ -207,6 +210,7 @@ def ring_beam_trap(
     V_trap = VX + VY + VZ
 
     # Add noise
+    np.random.seed(42)
     noise = np.random.rand(*V_trap.shape) * inhomogenity * (blue_trap_hight + red_trap_depth)/2
     return V_trap + noise
 

@@ -134,12 +134,12 @@ class GridSpatialBasisSet(SpatialBasisSet):
            Returns:
                power (ndarray): 1d array of the coefficients for each basis function representing f**exponent.
         """
-        if not isinstance(exponent, (float, int)): 
-            raise TypeError("exponent must be a float or int.")
-        self.coeffs = coeffs
-        self._check_and_process_input("gradient")
+        #if not isinstance(exponent, (float, int)): 
+        #    raise TypeError("exponent must be a float or int.")
+        #self.coeffs = coeffs
+        #self._check_and_process_input("gradient")
 
-        return self.coeffs**exponent # possible because grid basis funcs don't overlap
+        return coeffs**exponent # possible because grid basis funcs don't overlap
 
 
     def gradient(
@@ -154,11 +154,8 @@ class GridSpatialBasisSet(SpatialBasisSet):
            Returns:
                gradient (ndarray): 3d array of the gradient coefficients for each basis function.
         """
-        self.coeffs = coeffs
-        self._check_and_process_input("gradient")
-
         # Reshape coeffs into a 3D array
-        coeffs_3d = self.coeffs.reshape((self.num_grid_points[0], self.num_grid_points[1], self.num_grid_points[2]))
+        coeffs_3d = coeffs.reshape((self.num_grid_points[0], self.num_grid_points[1], self.num_grid_points[2]))
 
         # Calculate gradients
         if self.potential_function is None: # equidistant grid
@@ -181,10 +178,10 @@ class GridSpatialBasisSet(SpatialBasisSet):
             self,
             coeffs,
     ) -> ndarray:
-        self.coeffs = coeffs
-        self._check_and_process_input("gradient")
+        #self.coeffs = coeffs
+        #self._check_and_process_input("gradient")
 
-        grad = self.gradient(self.coeffs)
+        grad = self.gradient(coeffs)
         return np.sum(np.square(grad), axis=1)
 
 
@@ -200,11 +197,11 @@ class GridSpatialBasisSet(SpatialBasisSet):
            Returns:
                laplacian (ndarray): 1d array of the laplacian coefficients for each basis function.
         """
-        self.coeffs = coeffs
-        self._check_and_process_input("gradient")
+        #self.coeffs = coeffs
+        #self._check_and_process_input("gradient")
 
         # Reshape coeffs into a 3D array
-        coeffs_3d = self.coeffs.reshape((self.num_grid_points[0], self.num_grid_points[1], self.num_grid_points[2]))
+        coeffs_3d = coeffs.reshape((self.num_grid_points[0], self.num_grid_points[1], self.num_grid_points[2]))
 
         # Calculate second derivatives
         if self.potential_function is None:  # equidistant grid
@@ -239,9 +236,7 @@ class GridSpatialBasisSet(SpatialBasisSet):
            Returns:
                integral (float): Integral of the function.
         """
-        self.coeffs = coeffs
-        self._check_and_process_input("gradient")
-        return np.sum(self.coeffs * self.volumes)
+        return np.sum(coeffs * self.volumes)
 
 
     def _calculate_volumes(

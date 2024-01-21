@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.integrate import simpson
+from scipy.optimize import minimize
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -61,6 +62,7 @@ class BoseGas:
             self, 
             particle_props: ParticleProps,
             spatial_basis_set: Union[SpatialBasisSet, str] = 'grid',
+            zero_T_threshold: float = 0.01,
             init_with_zero_T: bool = True,
             **basis_set_kwargs,
         ):
@@ -77,9 +79,11 @@ class BoseGas:
         """
         self.particle_props = particle_props
         self.spatial_basis_set = spatial_basis_set
+        self.zero_T_threshold = zero_T_threshold
+        self.init_with_zero_T = init_with_zero_T
         self.basis_set_kwargs = basis_set_kwargs
         self._check_and_process_input("init")
-        
+
         # Initialize the external trapping potential
         self.V_trap_array = self.spatial_basis_set.get_coeffs(self.particle_props.V_trap)
         if isinstance(self.V_trap_array, Quantity):
@@ -105,17 +109,17 @@ class BoseGas:
         # Run a zero-temperature calculation to improve initial guess for `mu`. If the provided temperature is 
         # already zero, we don't run this in order to not disturb the workflow of always running eval_density() 
         # after initializing this class.
-        if init_with_zero_T and self.particle_props.T.value > 1e-3:
+        if self.init_with_zero_T and self.particle_props.T.value > self.zero_T_threshold:
             T = self.particle_props.T
             self.particle_props.T = 0 * u.nK 
-            self.eval_density(use_TF=True, use_Popov=False, show_progress=False)       
+            self.eval_density(use_TF=True, use_HF=True, show_progress=False)       
             self.particle_props.T = T
         
 
     def eval_density(
             self,
             use_TF: bool = True,
-            use_Popov: bool = False,
+            use_HF: bool = True,
             max_iter: int = 1000,
             mu_convergence_threshold: float = 1e-5,
             N_convergence_threshold: float = 1e-3,
@@ -137,7 +141,7 @@ class BoseGas:
                use_TF: if True, use the Thomas-Fermi approximation to update n0, 
                        if False, the generalized GPE is solved numerically to update n0
                        (might be computationally intensive). Defaults to True.
-               use_Popov: if True, use the semiclassical Popov approximation to update n_ex,
+               use_HF: if True, use the semiclassical Popov approximation to update n_ex,
                           if False, use the semiclassical Hartree-Fock approximation to update n_ex.
                           Defaults to False. TODO: Fix division by zero problem in Popov implementation!
                max_iter: maximum number of iterations
@@ -146,7 +150,7 @@ class BoseGas:
                                          `mu_convergence_threshold` times mu. Defaults to 1e-5.
                N_convergence_threshold: We call the iterative procedure converged if the change in particle number
                                         from one iteration to the next is smaller than `N_convergence_threshold` 
-                                        times `N_particles_target`. Defaults to 1e-3.
+                                        times `N_particles_target`. Defaults to self.zero_T_threshold.
                mu_change_rate: numerical hyperparameter for soft update of `mu`. Defaults to 0.01.
                mu_change_rate_adjustment: After so many iterations the `mu_change_rate` hyperparameter gets adjusted 
                                           for faster convergence. Defaults to 5.
@@ -163,7 +167,7 @@ class BoseGas:
         """
         # Approximations
         self.use_TF = use_TF
-        self.use_Popov = use_Popov
+        self.use_HF = use_HF
 
         # Set up convergence history list for the plot_convergence_history() method
         self.convergence_history_mu = [self.mu.value]
@@ -180,12 +184,12 @@ class BoseGas:
             if self.use_TF:
                 self._update_n0_with_TF_approximation()
             else:
-                raise NotImplementedError("This method is not implemented yet.")
+                self._update_n0_with_E_functional_minimization()
             
             # Update non-condensed density n_ex if T>0 (otherwise we have n_ex=0)
-            if self.particle_props.T.value > 1e-3:
+            if self.particle_props.T.value > self.zero_T_threshold:
                 self._update_n_ex(num_q_values, cutoff_factor) # This uses either the semiclassical HF or Popov approximation
-                                                               # depending on the self.use_Popov flag.
+                                                               # depending on the self.use_HF flag.
             
             # Update the total density n = n0 + nex
             self.n_array = self.n0_array + self.n_ex_array
@@ -244,6 +248,7 @@ class BoseGas:
 
     def _update_n0_with_TF_approximation(
             self,
+            V_additional_array: Union[Quantity, None] = None
         ):
         """Apply the Thomas-Fermi approximation to update the condensed density `n_0_array`.
            When μ>V(r)+2*g*nex(r), the expression for n0(r) is positive, indicating the presence of 
@@ -255,19 +260,99 @@ class BoseGas:
            density is physically meaningless.
         """
         # Calculate n0 with current chemical potential 
-        self.n0_array = np.maximum((self.mu - (self.V_trap_array + 2*self.particle_props.g*self.n_ex_array)) \
-                                    / self.particle_props.g, 0)
+        V_eff_array = self.V_trap_array + 2 * self.particle_props.g * self.n_ex_array
+        if V_additional_array is not None:
+            V_eff_array = V_eff_array + V_additional_array
+        self.n0_array = np.maximum((self.mu - V_eff_array) / self.particle_props.g, 0)
 
 
-    def _update_n0_by_solving_generalized_GPE(self,):
-        """Solve the generalized GPE to update the condensed density `n0_array`."""
-        raise NotImplementedError("This method is not implemented yet.")
+    def _update_n0_with_E_functional_minimization(
+            self,
+        ):
+        assert self.n0_array.unit == 1/u.um**3, "n_array must be in units of 1/um**3."
+        E_min = minimize(self._E_functional, self.n0_array.value, jac=self._E_functional_deriv, method='CG')
+        self.n0_array = E_min.x * 1/u.um**3
+
+
+
+    def _E_functional(
+            self,
+            n0_array: np.ndarray,
+            integrand_additional_array: Union[Quantity, None] = None,
+    )-> float:
+        unitless = False
+        if not isinstance(n0_array, Quantity):
+            n0_array = n0_array * 1/u.um**3
+            unitless = True
+
+        # Calculate the kinetic energy term in the E functional
+        # I assume that n0(r) defines a boundary surface in 3d space where it becomes zero and that (grad(n0(r)))**2 / n0(r)
+        # is zero beyond that surface. Thus, we can integrate only over the region where n0(r) is non-zero, i.e. mask out the 
+        # region where n0(r) is zero.
+        integrand_array = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**5
+        mask = n0_array > 0
+        integrand_array[mask] = self.spatial_basis_set.gradient_dot_gradient(n0_array)[mask] / n0_array[mask] 
+        Ekin = 1/8 * ((hbar**2/(2*self.particle_props.m) / k_B) * self.spatial_basis_set.integral(integrand_array)).to(u.nK)
+
+        # Calculate the potential energy term in the E functional
+        integrand_array = self.V_trap_array * (n0_array + self.n_ex_array) + \
+                          1/2 * self.particle_props.g * self.spatial_basis_set.power((n0_array + self.n_ex_array), 2)
+        if integrand_additional_array is not None:
+            integrand_array = integrand_array + integrand_additional_array
+        Epot = self.spatial_basis_set.integral(integrand_array).to(u.nK)
+
+        # Fix particle number by adding Lagrange multiplier (chemical potential)
+        Echem = - self.mu * (self.particle_props.N_particles - self.spatial_basis_set.integral(n0_array))
+
+        # Return total energy
+        if unitless:
+            return (Ekin + Epot + Echem).value
+        else:
+            return Ekin + Epot + Echem
+
+        
+
+    def _E_functional_deriv(
+            self,
+            n0_array: np.ndarray,
+            V_additional_array: Union[Quantity, None] = None,
+    ):
+        unitless = False
+        if not isinstance(n0_array, Quantity):
+            n0_array = n0_array * 1/u.um**3
+            unitless = True
+
+        # Calculate functional derivative of the kinetic energy term in the E functional w.r.t. n0(r)
+        # I assume that n0(r) defines a boundary surface in 3d space where it becomes zero and that (grad(n0(r)))**2 / n0(r)**2
+        # as well as laplacian(n0(r)) / n0(r) are zero beyond that surface. Thus, we can integrate only over the region where 
+        # n0(r) is non-zero, i.e. mask out the region where n0(r) is zero.
+        grad_Ekin = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**2
+        mask = n0_array > 0
+        grad_Ekin[mask] = self.spatial_basis_set.gradient_dot_gradient(n0_array)[mask] / self.spatial_basis_set.power(n0_array,2)[mask] \
+                          + 2 * self.spatial_basis_set.laplacian(n0_array)[mask] / n0_array[mask]
+        grad_Ekin = -1/8 * (hbar**2/(2*self.particle_props.m) * grad_Ekin / k_B).to(u.nK)
+
+        # Calculate functional derivative of the potential energy term in the E functional w.r.t. n0(r)
+        grad_Epot = (self.V_trap_array + self.particle_props.g * n0_array).to(u.nK)
+        if V_additional_array is not None:
+            grad_Epot = grad_Epot + V_additional_array
+
+        # Calculate functional derivative of the chemical potential term in the E functional w.r.t. n0(r)
+        grad_Echem = self.mu 
+
+        # Return gradient of the total energy w.r.t. n0(r)
+        if unitless:
+            return (grad_Ekin + grad_Epot + grad_Echem).value
+        else:
+            return grad_Ekin + grad_Epot + grad_Echem
+
 
 
     def _update_n_ex(
             self,
             num_q_values: int = 50,
             cutoff_factor: float = 10,
+            V_additional_array: Union[Quantity, None] = None,
         ):
         """Apply the semiclassical Hartree-Fock or Popov approximation to update the non-condensed 
            density `n_ex_array`. 
@@ -276,45 +361,41 @@ class BoseGas:
                 num_q_values: number of integrand evaluations for the simpson rule to integrate over momentum space. 
                               Defaults to 50.
         """
-        # Since we are at low temperature, integrating to infinite momentum is not necessary
-        # and will only lead to numerical problems since our excited particles have very low p
-        # and numerically we can only sum over a finite set of integrand evaluations and very
-        # likely just skip the region of interest (low p) und get out 0 from the integration.
-        # Thus we set a cutoff at p_cutoff = sqrt(2*pi*m*k*T) which corresponds to the momentum
-        # scale of the thermal de Broglie wavelength (i.e. lambda_dB = h/p_cutoff).
+        # Since we are at low temperature, we don't want to integrate over the entire momentum space, but only over low p 
+        # as the BE distribution goes to zero very quickly for large p. Thus we set a cutoff at p_cutoff = sqrt(2*pi*m*k*T) 
+        # which corresponds to the momentum scale of the thermal de Broglie wavelength (i.e. lambda_dB = h/p_cutoff).
         p_cutoff = np.sqrt(cutoff_factor * 2*np.pi*self.particle_props.m*k_B*self.particle_props.T).to(u.u*u.m/u.s) 
         # use this momentum units to deal with numerical numbers roughly on the order ~1
 
         # Also, for increased numerical stability, we can rescale the integral to the interval 
         # [0,1] and integrate over the dimensionless variable q = p/p_cutoff instead of p.
         q_values = np.linspace(0, 1, num_q_values) 
-        q_values = q_values[:, np.newaxis] # reshape to broadcast with spacial grid later 
+        q_values = q_values[:, np.newaxis] # reshape to broadcast with spatial basis set later
 
-        # Integrate using Simpson's rule (I chose this over quad() because quad() only works for scalar
-        # integrands, but we have a 3d array of integrand values. So to use quad() we would need to loop
-        # over the spatial grid and call quad() for each grid point, which is very slow. Simpson() can
-        # integrate over the whole array at once in a vectorized way, which is much faster.)
-        if self.use_Popov:
-            integrand_values = self._integrand_Popov(q_values, p_cutoff)
+        # Calculate integrand values for each spatial basis function and each q value
+        if self.use_HF:
+            integrand_values = self._integrand_HF(q_values, p_cutoff, V_additional_array)
         else:
-            integrand_values = self._integrand_HF(q_values, p_cutoff)
+            integrand_values = self._integrand_Popov(q_values, p_cutoff, V_additional_array)
 
-        # Check if integrand is zero at q=1 and integrate over q in the interval [0,1]
+        # Check if integrand is zero at q=1 to ensure the cutoff momentum is large enough
         max_integrand_val = np.max(integrand_values)
         max_integrand_val_at_q1 = np.max(integrand_values[-1,:])
         if max_integrand_val_at_q1 > 1e-10 * max_integrand_val: # Check if integrand is not zero at q=1
             print("WARNING: Integrating until q=1, but integrand is not zero at q=1. Consider increasing cutoff_factor.")
+
+        # Integrate using Simpson's rule to exploit vectorized implementation, which is not possible with scipy.integrate.quad()
         integral = simpson(integrand_values, q_values.flatten(), axis=0)
-#
+
         # Update n_ex_array 
         self.n_ex_array = np.maximum((integral*(p_cutoff.unit)**3 / (2*np.pi * hbar)**3).to(1/u.um**3), 0)
-        #return self._integrand_HF(q_values, p_cutoff)
 
 
     def _integrand_HF(
             self, 
             q: Union[float, np.ndarray],
             p_cutoff: Quantity,
+            V_additional_array: Union[Quantity, None] = None,
         ) -> np.ndarray:
         """Calculate the integrand in eq. 8.121 in "Bose Einstein Condensation in Dilute Gases" by C.J. Pethick 
            and H. Smith. Eq. 8.121 is a 3d volume-integral in momentum space, but luckily only depends on the 
@@ -329,14 +410,17 @@ class BoseGas:
             Returns:
                 f: Integrand p_cutoff*4*pi*p^2*f(eps_p) for the integration over q in the interval [0,1]
         """
+        # Momentum p is given by the dimensionless integration variable q times the cutoff momentum
         p = q * p_cutoff
 
-        # Calculation of eps_p(r) in semiclassical HF approximation (eq. 8.115). Note, that even if we use 
-        # the TF approximation for n0, we still need to incorporate the kinetic energy term for the excited states!
-        eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + \
-                 2*self.particle_props.g*(self.n0_array + self.n_ex_array)
+        # Calculation of eps_p(r) in semiclassical HF approximation (eq. 8.115). 
+        V_eff_array = self.V_trap_array + 2*self.particle_props.g * (self.n0_array + self.n_ex_array)
+        if V_additional_array is not None:
+            V_eff_array = V_eff_array + V_additional_array
+        eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + V_eff_array
 
-        return p_cutoff.value*4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) - 1) 
+        # Scaled integrand for the 1d integral over q in the interval [0,1]
+        return p_cutoff.value * 4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) - 1) 
 
 
 
@@ -344,6 +428,7 @@ class BoseGas:
             self, 
             q: Union[float, np.ndarray],
             p_cutoff: Quantity,
+            V_additional_array: Union[Quantity, None] = None,
         ) -> np.ndarray:
         #TODO: Somehow make sure that there is no divion by zero... (happens if chemical potential is too high
         #      such that eps_p becomes zero. 
@@ -362,18 +447,21 @@ class BoseGas:
                 f: Integrand p_cutoff*4*pi*p^2*((p^2/2m + 2gn_array + V_array -mu)/eps_p)*f(eps_p) for the 
                    integration over q in the interval [0,1]
         """
+        # Momentum p is given by the dimensionless integration variable q times the cutoff momentum
         p = q * p_cutoff
 
-        # Calculation of eps_p(r) in semiclassical Popov approximation (eq. 8.119). Note, that even if we use 
-        # the TF approximation for n0, we still need to incorporate the kinetic energy term for the excited states!
-        eps_p = np.sqrt(np.maximum(((p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + \
-                        2*self.particle_props.g*(self.n0_array + self.n_ex_array) - self.mu)**2 - \
+        # Calculation of eps_p(r) in semiclassical Popov approximation (eq. 8.119). 
+        V_eff_array = self.V_trap_array + 2*self.particle_props.g * (self.n0_array + self.n_ex_array)
+        if V_additional_array is not None:
+            V_eff_array = V_eff_array + V_additional_array
+        eps_p = np.sqrt(np.maximum(((p**2/(2*self.particle_props.m) / k_B).to(u.nK) + V_eff_array - self.mu)**2 - \
                         (self.particle_props.g*self.n0_array)**2, 0))
 
         num_non_condensed = ((p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array + \
                               2*self.particle_props.g*(self.n0_array + self.n_ex_array) - self.mu) / eps_p
         
         return p_cutoff.value*4*np.pi*p.value**2 * num_non_condensed / (np.exp(eps_p / self.particle_props.T) - 1)
+
 
 
     def plot_convergence_history(
@@ -388,7 +476,7 @@ class BoseGas:
                 start: start index of the convergence history list to be plotted. Defaults to 0.
                 end: end index of the convergence history list to be plotted. Defaults to -1, i.e. last index.
         """
-        if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
+        if (self.particle_props.T.value < self.zero_T_threshold and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
             title = kwargs.get('title', 'Convergence history, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))  
             filename = kwargs.get('filename', None)
 
@@ -423,7 +511,7 @@ class BoseGas:
             **kwargs,
         ):
         """Plot the spacial density n(x,0,0), n(0,y,0) and n(0,0,z) along each direction respectively."""
-        if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
+        if (self.particle_props.T.value < self.zero_T_threshold and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
             title = kwargs.get('title', 'Spacial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))  
             filename = kwargs.get('filename', None) 
 
@@ -507,7 +595,7 @@ class BoseGas:
         Args:
                 which: which densities to plot, either 'all', 'n', 'n0', or 'n_ex'. Defaults to 'all'."""
 
-        if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
+        if (self.particle_props.T.value < self.zero_T_threshold and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
             title = kwargs.get('title', 'Spatial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))
             filename = kwargs.get('filename', None)
 

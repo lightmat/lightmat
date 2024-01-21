@@ -14,6 +14,8 @@ from typing import Union, Sequence
 from .particle_props import ParticleProps
 from .spatial_basis import SpatialBasisSet, GridSpatialBasisSet
 
+# TODO: Include overlap of basis in functional energy minimization calculation! For grid it's fine like this but not in general.
+
 class FermiGas:
     """
     The FermiGas class is designed to model and analyze the properties of a Fermi Gas. It allows for the 
@@ -91,16 +93,17 @@ class FermiGas:
         # Run a zero-temperature calculation to improve initial guess for `mu`. If the provided temperature is 
         # already zero, we don't run this in order to not disturb the workflow of always running eval_density() 
         # after initializing this class.
-        if init_with_zero_T and self.particle_props.T.value > 1e-3:
+        if init_with_zero_T: #and self.particle_props.T.value > 1e-3:
             T = self.particle_props.T
             self.particle_props.T = 0 * u.nK 
-            self.eval_density(use_LDA=True, show_progress=False)       
+            self.eval_density(use_TF=True, show_progress=False)       
             self.particle_props.T = T
 
 
     def eval_density(
             self,
             use_LDA: bool = True,
+            use_TF: bool = False,
             max_iter: int = 1000,
             mu_convergence_threshold: float = 1e-5,
             N_convergence_threshold: float = 1e-3,
@@ -118,6 +121,8 @@ class FermiGas:
            Args:
                use_LDA: if True, use the semiclassical LDA to update n, if False, use the Thomas-Fermi 
                         approximation to update n. Defaults to True.
+               use_TF: if True, use the Thomas-Fermi approximation to update n at T=0, if False, use functional
+                       energy minimization. Defaults to False.
                max_iter: maximum number of iterations
                mu_convergence_threshold: We call the iterative procedure converged if the change in
                                          chemical potential from one iteration to the next is smaller than 
@@ -141,6 +146,7 @@ class FermiGas:
         """
         # Approximation
         self.use_LDA = use_LDA
+        self.use_TF = use_TF
 
         # Set up convergence history list for the plot_convergence_history() method
         self.convergence_history_mu = [self.mu.value]
@@ -151,11 +157,15 @@ class FermiGas:
         for iteration in iterator: 
             # Update density n
             if self.particle_props.T.value < 1e-3:
-                self._update_n_with_TF_approximation()
+                if use_TF:
+                    self._update_n_with_TF_approximation()
+                else:
+                    self._update_n_with_E_functional_minimization()
             elif self.use_LDA:
                 self._update_n_with_LDA(num_q_values, cutoff_factor)
             else:
-                self._update_n_with_E_functional_minimization()
+                raise NotImplementedError("Only LDA is implemented for non-zero T so far.")
+            
             
             # Update the particle number
             self.N_particles = self.spatial_basis_set.integral(self.n_array)
@@ -288,8 +298,13 @@ class FermiGas:
     def _update_n_with_E_functional_minimization(
             self,
         ):
-        E_min = minimize(self._E_functional, self.n_array, jac=self._E_functional_deriv,)
-        self.n_array = E_min.x
+        assert self.n_array.unit == 1/u.um**3, "n_array must be in units of 1/um**3."
+        E_min = minimize(self._E_functional, self.n_array.value, jac=self._E_functional_deriv, method='CG')
+        self.n_array = E_min.x * 1/u.um**3
+
+        N_particles = self.spatial_basis_set.integral(self.n_array)
+        print("N_particles: ", N_particles)
+        self.n_array *= self.particle_props.N_particles / N_particles
 
 
 
@@ -297,6 +312,11 @@ class FermiGas:
             self,
             n_array: np.ndarray,
     )-> float:
+        unitless = False
+        if not isinstance(n_array, Quantity):
+            n_array = n_array * 1/u.um**3
+            unitless = True
+
         Ekin1 = (6*np.pi**2)**(5/3)/(10*np.pi**2) * self.spatial_basis_set.integral(self.spatial_basis_set.power(n_array, 5/3)) 
 
         # I assume that n(r) defines a boundary surface in 3d space where it becomes zero and that (grad(n(r)))**2 / n(r)
@@ -314,7 +334,10 @@ class FermiGas:
 
         Epot = self.spatial_basis_set.integral(n_array * self.V_trap_array).to(u.nK)
 
-        return (Ekin + Epot)
+        if unitless:
+            return (Ekin + Epot).value
+        else:
+            return Ekin + Epot
 
         
 
@@ -322,6 +345,11 @@ class FermiGas:
             self,
             n_array: np.ndarray,
     ):
+        unitless = False
+        if not isinstance(n_array, Quantity):
+            n_array = n_array * 1/u.um**3
+            unitless = True
+
         grad_Ekin1 = (6*np.pi**2)**(5/3)/(10*np.pi**2) * 5/3 * self.spatial_basis_set.power(n_array, 2/3)
 
         grad_Ekin2 = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**2
@@ -330,11 +358,15 @@ class FermiGas:
                                 / self.spatial_basis_set.power(n_array, 2)[mask] + \
                                 2 * self.spatial_basis_set.laplacian(n_array)[mask] / n_array[mask])
 
-        grad_E = (hbar**2/(2*self.particle_props.m) * (grad_Ekin1 + grad_Ekin2) / k_B).to(u.nK)
+        grad_Ekin = (hbar**2/(2*self.particle_props.m) * (grad_Ekin1 + grad_Ekin2) / k_B).to(u.nK)
 
-        return (grad_E + self.V_trap_array)
+        grad_Epot = self.V_trap_array
+
+        if unitless:
+            return (grad_Ekin + grad_Epot).value
+        else:
+            return grad_Ekin + grad_Epot
         
-
 
 
     def plot_convergence_history(
