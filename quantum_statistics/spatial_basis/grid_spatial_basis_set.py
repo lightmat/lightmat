@@ -142,6 +142,26 @@ class GridSpatialBasisSet(SpatialBasisSet):
         return coeffs**exponent # possible because grid basis funcs don't overlap
 
 
+    def log(
+            self,
+            coeffs: ndarray,
+    )-> ndarray:
+        """Calculate the natural logarithm of the function f expanded in the basis set.
+            
+           Args:
+               coeffs (ndarray): 1d array of coefficients for each basis function.
+               
+           Returns:
+               log (ndarray): 1d array of the coefficients for each basis function representing log(f).
+        """
+        #if not isinstance(exponent, (float, int)): 
+        #    raise TypeError("exponent must be a float or int.")
+        #self.coeffs = coeffs
+        #self._check_and_process_input("gradient")
+
+        return np.log(coeffs) # possible because grid basis funcs don't overlap
+
+
     def gradient(
             self, 
             coeffs,

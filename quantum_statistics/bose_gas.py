@@ -85,7 +85,7 @@ class BoseGas:
                particle_props: Instance of ParticleProps class with species='boson'.
                spatial_basis_set: Instance of SpatialBasisSet class or string, right now only 'grid' is supported. Defaults to 'grid'.
                init_with_zero_T: If True, run a zero-temperature calculation to improve initial guess for `mu`.
-               zero_T_threshold: If the temperature is below this threshold, we assume T=0. Defaults to 0.01.
+               zero_T_threshold: If the temperature is below this threshold, we assume T=0. Defaults to 0.01nK.
                **basis_set_kwargs: Keyword arguments for the SpatialBasisSet class.
         """
         self.particle_props = particle_props
@@ -154,7 +154,7 @@ class BoseGas:
         
            Args:
                use_TF: if True, use the Thomas-Fermi approximation to update n0, 
-                       if False, the energy functional is minimized w.r.t. n0 using CG descent. Defaults to True.
+                       if False, the energy functional is minimized w.r.t. n0 using CG minimization. Defaults to True.
                use_HF: if True, use the semiclassical Hatree Fock approximation to update n_ex,
                        if False, use the semiclassical Popov approximation to update n_ex. Defaults to False. 
                        TODO: Fix division by zero problem in Popov implementation!
@@ -180,11 +180,11 @@ class BoseGas:
                               which iteration convergence was reached. Defaults to True.
         """
         # Approximations
-        self.use_TF = True if init_with_TF else use_TF # If we want to use energy functional minimization, we can initialize with TF
+        self.use_TF = use_TF 
         self.use_HF = use_HF
 
-        if init_with_TF == True and use_TF == False:
-            print("Initial n0, n_ex and mu are calculated with the Thomas-Fermi approximation, then functional energy minimization is used.")
+        if init_with_TF and not self.use_TF:
+            print("Initial n0 is calculated with the Thomas-Fermi approximation, then functional energy minimization is used.")
 
         # Set up convergence history list for the plot_convergence_history() method
         self.convergence_history_mu = [self.mu.value]
@@ -201,10 +201,13 @@ class BoseGas:
         iterator = tqdm(range(max_iter)) if show_progress else range(max_iter)
         for iteration in iterator: 
             # Update condensed density n0
-            if self.use_TF:
+            if self.use_TF or init_with_TF:
                 self._update_n0_with_TF_approximation()  
             else:
-                self._update_n0_with_E_functional_minimization()
+                if self.particle_props.T.value <= self.zero_T_threshold: # Energy functional minimization is only implemented for T=0
+                    self._calculate_n0_with_E_functional_minimization()
+                else:
+                    raise NotImplementedError("Energy functional minimization is only implemented for T=0. RDMFT is not implemented yet.")
             
             # Update non-condensed density n_ex if T>0 (otherwise we have n_ex=0)
             if self.particle_props.T.value > self.zero_T_threshold:
@@ -261,9 +264,9 @@ class BoseGas:
             # Check convergence criterion
             if delta_mu_value < mu_convergence_threshold*np.abs(self.mu.value) and \
                np.abs(self.particle_props.N_particles-self.N_particles) < N_convergence_threshold*self.particle_props.N_particles:
-                if init_with_TF == True and use_TF == False:
-                    self.use_TF = False # from now on, we continue with energy functional minimization
-                    init_with_TF = False # set to False to not go into this if statement again
+                if init_with_TF and not self.use_TF:
+                    init_with_TF = False # set to False to continue with energy functional minimization
+                    print("Initialization done. Now using energy functional minimization.")
                     continue
                 if show_progress:
                     print(f"Convergence reached after {iteration} iterations.")
@@ -281,54 +284,61 @@ class BoseGas:
            Args:
                 V_additional_array: additional potential to be added to the effective potential. Defaults to None.
         """
-        # Calculate n0 with current chemical potential 
+        # Add additional potential to V_eff if provided
         V_eff_array = self.V_trap_array + 2 * self.particle_props.g * self.n_ex_array
         if V_additional_array is not None:
             V_eff_array = V_eff_array + V_additional_array
+
+        # Calculate n0(r) with TF approximation
         self.n0_array = np.maximum((self.mu - V_eff_array) / self.particle_props.g, 0)
 
 
 
-    def _update_n0_with_E_functional_minimization(
+    def _calculate_n0_with_E_functional_minimization(
             self,
         ):
-        """Minimize the energy functional E[n0] = Ekin[n0] + Epot[n0] + Echem[n0] w.r.t. n0(r) to update the
+        """Minimize the energy functional E[n0] = Ekin[n0] + Epot[n0] w.r.t. n0(r) to update the
            condensed density `n_0_array` with
 
            Ekin[n0] = int d^3r 1/8 * (hbar**2/(2*m) * (grad(n0(r)))**2 / n0(r) / k_B) 
            Epot[n0] = int d^3r V_eff(r) * n(r) with V_eff(r) = (V_trap(r) + g*(n0(r) + n_ex(r))
-           Echem[n0] = -mu * (int d^3r (n0(r) + n_ex(r)) - N_particles)
 
-          The Echem[n0] term is added to fix the particle number. The minimization is done using scipy.optimize.minimize()
-          with the conjugate gradient method.
+          The minimization is done using scipy.optimize.minimize().
         """
         assert self.n0_array.unit == 1/u.um**3, "n_array must be in units of 1/um**3."
-        Emin = minimize(self._E_functional, self.n0_array.value, jac=self._E_functional_deriv, method='CG', tol=1e-5)
-        self.n0_array = np.maximum(Emin.x, 0) * 1/u.um**3
+
+        # Calculate n0(r) by minimizing the energy functional E[n0] = Ekin[n0] + Epot[n0]
+        bounds = [(0, None) for _ in range(self.spatial_basis_set.num_basis_funcs)] # n0(r) must be positive everywhere
+        E_min = minimize(self._E_functional, self.n0_array.value, jac=self._E_functional_deriv, bounds=bounds, method='L-BFGS-B')
+        self.n0_array = E_min.x * 1/u.um**3
+
+        # Normalize n(r) to the total particle number N_particles, this only works at T=0. At T>0 we need something
+        # more sophisticated depending on the chemical potential mu, e.g. RDMFT.
+        self.n0_array = self.n0_array * self.particle_props.N_particles / self.spatial_basis_set.integral(self.n0_array)
 
         
-
-
 
     def _E_functional(
             self,
             n0_array: np.ndarray,
             integrand_additional_array: Union[Quantity, None] = None,
-    )-> float:
-        """Calculate the energy functional E[n0] = Ekin[n0] + Epot[n0] + Echem[n0] for a given condensed density `n0_array` with
+    )-> Union[Quantity, float]:
+        """Calculate the energy functional E[n0] = Ekin[n0] + Epot[n0] for a given condensed density `n0_array` with
 
            Ekin[n0] = int d^3r 1/8 * (hbar**2/(2*m) * (grad(n0(r)))**2 / n0(r) / k_B) 
            Epot[n0] = int d^3r V_eff(r) * n(r) with V_eff(r) = (V_trap(r) + g*(n0(r) + n_ex(r))
-           Echem[n0] = -mu * (int d^3r (n0(r) + n_ex(r)) - N_particles)
 
            It is possible to add an additional integrand of the form V(r)*n(r) for some potential and some density to the Epot[n0] 
-           term. This can be useful to include e.g. interactions with a density of fermions. The Echem[n0] term is added to fix 
-           the particle number.
+           term. This can be useful to include e.g. interactions with a density of fermions. 
 
            Args:
                 n0_array: condensed density n0(r) in units of [1/um**3]
                 integrand_additional_array: additional integrand to be added to the Epot[n0] term. Defaults to None.
+
+           Returns:
+                E: Energy functional E[n0] in units of [nK]
         """
+        # Convert n0(r) to units of [1/um**3] if it has no unit attached
         unitless = False
         if not isinstance(n0_array, Quantity):
             n0_array = n0_array * 1/u.um**3
@@ -350,14 +360,11 @@ class BoseGas:
             integrand_array = integrand_array + integrand_additional_array
         Epot = self.spatial_basis_set.integral(integrand_array).to(u.nK)
 
-        # Fix particle number by adding Lagrange multiplier (chemical potential)
-        Echem = -self.mu * (self.spatial_basis_set.integral(n0_array + self.n_ex_array) - self.particle_props.N_particles)
-
-        # Return total energy
+        # Return total energy, if no unit was attached to n0_array return energy also without unit
         if unitless:
-            return (Ekin + Epot + Echem).value
+            return (Ekin + Epot).value
         else:
-            return Ekin + Epot + Echem
+            return Ekin + Epot
 
         
 
@@ -365,20 +372,28 @@ class BoseGas:
             self,
             n0_array: np.ndarray,
             V_additional_array: Union[Quantity, None] = None,
-    ):
-        """Calculate the functional derivative of the energy functional E[n0] = Ekin[n0] + Epot[n0] + Echem[n0] w.r.t. n0(r), i.e.
-           dE/dn0(r) = dEkin/dn0(r) + dEpot/dn0(r) + dEchem/dn0(r) with
+    ) -> Union[Quantity, float]:
+        """Calculate the functional derivative of the energy functional E[n0] = Ekin[n0] + Epot[n0] w.r.t. n0(r), i.e.
+           dE/dn0(r) = dEkin/dn0(r) + dEpot/dn0(r) with
            
            dEkin/dn0(r) = -1/8 * (hbar**2/(2*m) * grad(n0(r)))**2 / n0(r)**2 
            dEpot/dn0(r) = V_eff(r) with V_eff(r) = V_trap(r) + g*n0(r)
-           dEchem/dn0(r) = -mu
 
            It is possible to add an additional potential V(r) to the Epot[n0] term. This can be useful to include e.g. 
-           interactions with a density of fermions. The Echem[n0] term is added to fix the particle number.
+           interactions with a density of fermions. 
+
+           Note, that the functional derivative of the energy functional evaluated at the true density n0(r) corresponds 
+           to the local chemical potential mu(r)! If we evaluate the functional derivative at the true density
+           n0(r) at the position r corresponding to the minimum of the effective potential V_eff(r), we obtain the global
+           chemical potential mu, i.e. the energy necessary to add one particle to the system keeping entropy and volume 
+           fixed.
 
            Args:
                 n0_array: condensed density n0(r) in units of [1/um**3]
-                V_additional_array: additional potential to be added to the effective potential. Defaults to None.           
+                V_additional_array: additional potential to be added to the effective potential. Defaults to None.    
+
+           Returns:       
+                deriv_E: functional derivative of the energy functional E[n0] w.r.t. n0(r) in units of [nK]
         """
         unitless = False
         if not isinstance(n0_array, Quantity):
@@ -389,25 +404,22 @@ class BoseGas:
         # I assume that n0(r) defines a boundary surface in 3d space where it becomes zero and that (grad(n0(r)))**2 / n0(r)**2
         # as well as laplacian(n0(r)) / n0(r) are zero beyond that surface. Thus, we can integrate only over the region where 
         # n0(r) is non-zero, i.e. mask out the region where n0(r) is zero.
-        grad_Ekin = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**2
+        deriv_Ekin = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**2
         mask = n0_array > 0
-        grad_Ekin[mask] = self.spatial_basis_set.gradient_dot_gradient(n0_array)[mask] / self.spatial_basis_set.power(n0_array,2)[mask] \
+        deriv_Ekin[mask] = self.spatial_basis_set.gradient_dot_gradient(n0_array)[mask] / self.spatial_basis_set.power(n0_array,2)[mask] \
                           + 2 * self.spatial_basis_set.laplacian(n0_array)[mask] / n0_array[mask]
-        grad_Ekin = -1/8 * (hbar**2/(2*self.particle_props.m) * grad_Ekin / k_B).to(u.nK)
+        deriv_Ekin = -1/8 * (hbar**2/(2*self.particle_props.m) * deriv_Ekin / k_B).to(u.nK)
 
         # Calculate functional derivative of the potential energy term in the E functional w.r.t. n0(r)
-        grad_Epot = (self.V_trap_array + self.particle_props.g * n0_array).to(u.nK)
+        deriv_Epot = (self.V_trap_array + self.particle_props.g * n0_array).to(u.nK)
         if V_additional_array is not None:
-            grad_Epot = grad_Epot + V_additional_array
+            deriv_Epot = deriv_Epot + V_additional_array
 
-        # Calculate functional derivative of the chemical potential term in the E functional w.r.t. n0(r)
-        grad_Echem = -self.mu 
-
-        # Return gradient of the total energy w.r.t. n0(r)
+        # Return functional derivative of the total energy w.r.t. n0(r). If no unit was attached to n0_array, return also no unit
         if unitless:
-            return (grad_Ekin + grad_Epot + grad_Echem).value
+            return (deriv_Ekin + deriv_Epot).value
         else:
-            return grad_Ekin + grad_Epot + grad_Echem
+            return deriv_Ekin + deriv_Epot
 
 
 
@@ -530,7 +542,7 @@ class BoseGas:
         # Momentum p is given by the dimensionless integration variable q times the cutoff momentum
         p = q * p_cutoff
 
-        # Calculation of eps_p(r) in semiclassical Popov approximation (eq. 8.119). 
+        # Calculation of eps_p(r) in semiclassical Popov approximation (eq. 8.119 in Pethick & Smith). 
         V_eff_array = self.V_trap_array + 2*self.particle_props.g * (self.n0_array + self.n_ex_array)
         if V_additional_array is not None:
             V_eff_array = V_eff_array + V_additional_array
@@ -713,23 +725,30 @@ class BoseGas:
                         X, Y = np.meshgrid(x, y)
                         slice_2d = self._check_n(self.spatial_basis_set.expand_coeffs(density_array, X, Y, 0))
                         im = ax.pcolormesh(x, y, slice_2d)
+                        ax.set_aspect('equal', adjustable='box')
+                        ax.set_xlabel('x [μm]', fontsize=12)
+                        ax.set_ylabel('y [μm]', fontsize=12)
                         title = f'{density_label}(x, y, 0)'
                     elif j == 1:  # x-z plane
                         X, Z = np.meshgrid(x, z)
                         slice_2d = self._check_n(self.spatial_basis_set.expand_coeffs(density_array, X, 0, Z))
                         im = ax.pcolormesh(x, z, slice_2d)
+                        ax.set_aspect('equal', adjustable='box')
+                        ax.set_xlabel('x [μm]', fontsize=12)
+                        ax.set_ylabel('z [μm]', fontsize=12)
                         title = f'{density_label}(x, 0, z)'
                     else:  # y-z plane
                         Y, Z = np.meshgrid(y, z)
                         slice_2d = self._check_n(self.spatial_basis_set.expand_coeffs(density_array, 0, Y, Z))
                         im = ax.pcolormesh(y, z, slice_2d)
+                        ax.set_aspect('equal', adjustable='box')
+                        ax.set_xlabel('y[μm]', fontsize=12)
+                        ax.set_ylabel('z [μm]', fontsize=12)
                         title = f'{density_label}(0, y, z)'
                     ax.set_aspect('equal', adjustable='box')
 
                     # Plotting
                     ax.set_title(title, fontsize=18)
-                    ax.set_xlabel(f'{["y", "z", "x"][j]} [μm]', fontsize=12)
-                    ax.set_ylabel(f'{["x", "y", "z"][j]} [μm]', fontsize=12)
 
                     divider = make_axes_locatable(ax)
                     cax = divider.append_axes("right", size="5%", pad=0.05)

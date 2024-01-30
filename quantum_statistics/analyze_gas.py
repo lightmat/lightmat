@@ -154,65 +154,45 @@ def box_2d_harmonic_1d_trap(
 
 
 def ring_beam_trap(
-        x: Union[float, np.ndarray],
-        y: Union[float, np.ndarray],
-        z: Union[float, np.ndarray],
-        flat_sizes: Sequence[float] = (100, 100, 20),
-        boundary_waists: Sequence[float] = (6, 6, 13),
-        blue_trap_hight: float = 300,
-        red_trap_depth: float = 100,
-        inhomogenity: float = 0.01,
+        X: Union[float, np.ndarray],
+        Y: Union[float, np.ndarray],
+        Z: Union[float, np.ndarray],
+        ring_radius: float = 30.0,
+        waist_xy: float = 6.0,
+        waist_z: float = 13.0,
+        flat_z: float = 5.0,
+        blue_trap_height: float = 300.0,
+        red_trap_depth: float = 100.0,
+        inhomogeneity: float = 0.01,
+        seed: int = 42
 ):
-    x = np.asarray(x)
-    y = np.asarray(y)
-    z = np.asarray(z)
-    if isinstance(x, Quantity):
-        x = x.to(u.um).value
-    if isinstance(y, Quantity):
-        y = y.to(u.um).value
-    if isinstance(z, Quantity):
-        z = z.to(u.um).value
-    if isinstance(flat_sizes, Quantity):
-        flat_sizes = flat_sizes.to(u.um).value
-    if isinstance(boundary_waists, Quantity):
-        boundary_waists = boundary_waists.to(u.um).value
-    if isinstance(blue_trap_hight, Quantity):
-        blue_trap_hight = blue_trap_hight.to(u.nK).value
-    if isinstance(red_trap_depth, Quantity):
-        red_trap_depth = red_trap_depth.to(u.nK).value
+    # Ensure X, Y, Z are numpy arrays
+    X = np.asarray(X, dtype=np.float64)
+    Y = np.asarray(Y, dtype=np.float64)
+    Z = np.asarray(Z, dtype=np.float64)
+    
+    # Calculate radial distance from the center (0, 0) for each point
+    R = np.sqrt(X**2 + Y**2)
+    # Setting potential to max value outside the ring
+    Vxy = np.full_like(R, blue_trap_height)
+    # Within the ring, calculate the Gaussian profile
+    inside_ring = R <= (ring_radius)
+    Vxy[inside_ring] = blue_trap_height * np.exp(-2 * (R[inside_ring] - ring_radius)**2 / waist_xy**2)
+    
+    # Create box trap profile with Gaussian edges for Z direction
+    gaussian_edges_z = np.exp(-2 * (np.abs(Z) - flat_z / 2)**2 / waist_z**2)
+    Vz = -red_trap_depth * gaussian_edges_z / gaussian_edges_z.max()
+    Vz[np.abs(Z) <= flat_z / 2] = -red_trap_depth
 
-    # Extract 1d arrays x,y,z if X,Y,Z are regular meshgrid
-    if x.ndim > 1:
-        x = x[:,0,0]
-    if y.ndim > 1:
-        y = y[0,:,0]
-    if z.ndim > 1:
-        z = z[0,0,:]
-
-    ring_radius_x = 0.5 * flat_sizes[0]
-    ring_radius_y = 0.5 * flat_sizes[1]
-    waist_of_ring_x = boundary_waists[0]
-    waist_of_ring_y = boundary_waists[1]
-    I_ring_x = np.exp(-2 * (x-ring_radius_x)**2 / waist_of_ring_x**2) + np.exp(-2 * (x+ring_radius_x)**2 / waist_of_ring_x**2)
-    I_ring_y = np.exp(-2 * (y-ring_radius_y)**2 / waist_of_ring_y**2) + np.exp(-2 * (y+ring_radius_y)**2 / waist_of_ring_y**2)
-
-    Vx = blue_trap_hight * I_ring_x/np.max(I_ring_x)
-    Vy = blue_trap_hight * I_ring_y/np.max(I_ring_y)
-
-    waist_z = boundary_waists[2]
-    flat_width_z = flat_sizes[2]
-    flat_region_z = (np.abs(z) <= flat_width_z / 2)
-    gaussian_edges = np.exp(-2 * ((z-flat_width_z/2)**2) / waist_z**2) + np.exp(-2 * ((z+flat_width_z/2)**2) / waist_z**2)
-    Vz = -red_trap_depth * gaussian_edges/np.max(gaussian_edges)
-    Vz[flat_region_z] = - red_trap_depth
-
-    VX, VY, VZ = np.meshgrid(Vx, Vy, Vz, indexing='ij')
-    V_trap = VX + VY + VZ
+    # Combine the XY and Z potentials
+    V_trap = Vxy + Vz
 
     # Add noise
-    np.random.seed(42)
-    noise = np.random.rand(*V_trap.shape) * inhomogenity * (blue_trap_hight + red_trap_depth)/2
-    return V_trap + noise
+    np.random.seed(seed)
+    noise = np.random.uniform(-1, 1, V_trap.shape) * inhomogeneity * (blue_trap_height + red_trap_depth) / 2
+    V_trap += noise
+
+    return V_trap
 
 
 

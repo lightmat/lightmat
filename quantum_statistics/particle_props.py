@@ -159,6 +159,10 @@ class ParticleProps:
         else:
             self.g = ((4*np.pi*(hbar**2)*self.a_s/self.m) / k_B).to(u.nK * u.um**3) 
 
+        # V_trap_kwargs
+        for key, value in V_trap_kwargs.items():
+            setattr(self, key, value)
+
 
     def V_trap(self, *args):
         """
@@ -195,6 +199,7 @@ class ParticleProps:
             self, 
             which: str = "all",
             num_grid_points: int = 201,
+            **kwargs,
         ):
         """Plots the trap potential of the system.
         
@@ -204,6 +209,9 @@ class ParticleProps:
         """
         if which not in ['all', 'all1d', 'all2d', 'x', 'y', 'z', 'xy', 'xz', 'yz']:
             raise ValueError("which must be one of 'all', 'all1d', 'all2d', 'x', 'y', 'z', 'xy', 'xz', or 'yz'.")
+        
+        title = kwargs.get('title', "Trap potential of " + self.name)  
+        filename = kwargs.get('filename', None)
         
         x = np.linspace(self.domain[0,0].value, self.domain[0,1].value, num_grid_points) 
         y = np.linspace(self.domain[1,0].value, self.domain[1,1].value, num_grid_points) 
@@ -231,14 +239,14 @@ class ParticleProps:
                 titles = ['Along X', 'Along Y', 'Along Z', 'XY Plane', 'XZ Plane', 'YZ Plane']
 
             fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
-            fig.suptitle("Trap potential of " + self.name, fontsize=22)
+            fig.suptitle(title, fontsize=22)
 
             for ax, setting, title in zip(axs.flatten(), settings, titles):
                 ax.set_title(title, fontsize=18)
                 if len(setting) == 1:
                     self._plot_1d(V_trap_result, num_grid_points, fig, ax, setting)
                 elif len(setting) == 2:
-                    self._plot_2d(V_trap_result, num_grid_points, fig, ax, setting)
+                    self._plot_2d(V_trap_result, x, y, z, num_grid_points, fig, ax, setting)
 
             plt.tight_layout()
             plt.show()
@@ -248,6 +256,9 @@ class ParticleProps:
                 self._plot_1d(None, None, which)
             elif len(which) == 2:
                 self._plot_2d(None, None, which)
+
+        if filename is not None:
+            fig.savefig(filename, dpi=300, bbox_inches='tight')
 
 
     def _plot_1d(
@@ -283,6 +294,9 @@ class ParticleProps:
     def _plot_2d(
             self, 
             V_trap_result,
+            x, 
+            y, 
+            z,
             num_grid_points,
             fig, 
             ax, 
@@ -294,20 +308,20 @@ class ParticleProps:
 
         im = None
         if which == "xy":
-            im = ax.imshow(V_trap_result[:,:,num_grid_points//2], extent=[self.domain[0,0].value, self.domain[0,1].value, \
-                            self.domain[1,0].value, self.domain[1,1].value], origin='lower')
-            ax.set_xlabel(r"$y \; [\mu m]$", fontsize=18)
-            ax.set_ylabel(r"$x \; [\mu m]$", fontsize=18)
-        elif which == "xz":
-            im = ax.imshow(V_trap_result[:,num_grid_points//2,:], extent=[self.domain[0,0].value, self.domain[0,1].value, \
-                            self.domain[2,0].value, self.domain[2,1].value], origin='lower')
-            ax.set_xlabel(r"$z \; [\mu m]$", fontsize=18)
-            ax.set_ylabel(r"$x \; [\mu m]$", fontsize=18)
-        elif which == "yz":
-            im = ax.imshow(V_trap_result[num_grid_points//2,:,:], extent=[self.domain[1,0].value, self.domain[1,1].value, \
-                            self.domain[2,0].value, self.domain[2,1].value], origin='lower')
-            ax.set_xlabel(r"$z \; [\mu m]$", fontsize=18)
+            im = ax.pcolormesh(x, y, V_trap_result[:,:,num_grid_points//2].T)
+            ax.set_aspect('equal', adjustable='box')
+            ax.set_xlabel(r"$x \; [\mu m]$", fontsize=18)
             ax.set_ylabel(r"$y \; [\mu m]$", fontsize=18)
+        elif which == "xz":
+            im = ax.pcolormesh(x, z, V_trap_result[:,num_grid_points//2,:].T)
+            ax.set_aspect('equal', adjustable='box')
+            ax.set_xlabel(r"$x \; [\mu m]$", fontsize=18)
+            ax.set_ylabel(r"$z \; [\mu m]$", fontsize=18)
+        elif which == "yz":
+            im = ax.pcolormesh(y, z, V_trap_result[num_grid_points//2,:,:].T)
+            ax.set_aspect('equal', adjustable='box')
+            ax.set_xlabel(r"$y \; [\mu m]$", fontsize=18)
+            ax.set_ylabel(r"$z \; [\mu m]$", fontsize=18)
 
         if im is not None:
             # Create an axis for the colorbar

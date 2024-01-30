@@ -11,6 +11,11 @@ from astropy.constants import hbar, k_B
 from astropy.units import Quantity
 from typing import Union, Sequence
 
+import warnings
+
+# Convert all warnings to errors
+#warnings.simplefilter('error')
+
 from .particle_props import ParticleProps
 from .spatial_basis import SpatialBasisSet, GridSpatialBasisSet
 
@@ -56,28 +61,32 @@ class FermiGas:
             particle_props: ParticleProps,
             spatial_basis_set: Union[SpatialBasisSet, str] = 'grid',
             init_with_zero_T: bool = True,
+            zero_T_threshold: float = 0.01,
             **basis_set_kwargs,
         ):
-        """Initialize FermiGas class. Make sure to use the correct units as specified below!!! If you are 
-           using astropy units, you can use units that are equilvalent to the ones specified below.
+        """Initialize FermiGas class. 
         
            Args:
-               particle_props: Instance of ParticleProps class containing all relevant particle properties.
-               num_grid_points (Sequence, np.ndarray, or int): Number of grid points in each spatial dimension. Either
-                                                               a sequence of length 3 containing the number of grid points
-                                                               in each dimension, or a single integer specifying the same
-                                                               number of grid points in each dimension. Defaults to 101.
-               init_with_zero_T (bool): If True, run a zero-temperature calculation to improve initial guess for `mu`.
+               particle_props: Instance of ParticleProps class with species='fermion'.
+               spatial_basis_set: Instance of SpatialBasisSet class or string, right now only 'grid' is supported. Defaults to 'grid'.
+               init_with_zero_T: If True, run a zero-temperature calculation to improve initial guess for `mu`.
+               zero_T_threshold: If the temperature is below this threshold, we assume T=0. Defaults to 0.01nK.
+               **basis_set_kwargs: Keyword arguments for the SpatialBasisSet class.
         """
         self.particle_props = particle_props
         self.spatial_basis_set = spatial_basis_set
+        self.init_with_zero_T = init_with_zero_T
+        self.zero_T_threshold = zero_T_threshold
         self.basis_set_kwargs = basis_set_kwargs
         self._check_and_process_input("init")
-        
+
         # Initialize the external trapping potential
         self.V_trap_array = self.spatial_basis_set.get_coeffs(self.particle_props.V_trap)
         if isinstance(self.V_trap_array, Quantity):
-            self.V_trap_array = self.V_trap_array.to(u.nK)
+            if self.V_trap_array.unit.is_equivalent(u.nK):
+                self.V_trap_array = self.V_trap_array.to(u.nK)
+            else:
+                raise ValueError("V_trap must be in units of nK.")
         else:
             self.V_trap_array *= u.nK
         
@@ -86,24 +95,25 @@ class FermiGas:
         # But we don't want a position-dependent mu, so as an initial guess we take:
         self.mu = np.min(self.V_trap_array) + np.abs(np.average(self.V_trap_array))
 
-        # Initialize the density arrays
+        # Initialize the density array, which gets assigned meaningful values after running eval_density()
         self.n_array = None
-        self.N_particles = None
+        self._update_n_with_TF_approximation()
+        self.N_particles = self.spatial_basis_set.integral(self.n_array)
 
         # Run a zero-temperature calculation to improve initial guess for `mu`. If the provided temperature is 
         # already zero, we don't run this in order to not disturb the workflow of always running eval_density() 
         # after initializing this class.
-        if init_with_zero_T: #and self.particle_props.T.value > 1e-3:
+        if self.init_with_zero_T and self.particle_props.T.value > self.zero_T_threshold:
             T = self.particle_props.T
             self.particle_props.T = 0 * u.nK 
-            self.eval_density(use_TF=True, show_progress=False)       
+            self.eval_density(use_TF=True, use_LDA=False, show_progress=False)    # Check!!!   
             self.particle_props.T = T
 
 
     def eval_density(
             self,
-            use_LDA: bool = True,
-            use_TF: bool = False,
+            use_TF_or_LDA: bool = True,
+            init_with_TF_or_LDA: bool = True,
             max_iter: int = 1000,
             mu_convergence_threshold: float = 1e-5,
             N_convergence_threshold: float = 1e-3,
@@ -119,10 +129,11 @@ class FermiGas:
            run `plot_convergence_history()` to see if you are satisfied with the convergence.
         
            Args:
-               use_LDA: if True, use the semiclassical LDA to update n, if False, use the Thomas-Fermi 
-                        approximation to update n. Defaults to True.
-               use_TF: if True, use the Thomas-Fermi approximation to update n at T=0, if False, use functional
-                       energy minimization. Defaults to False.
+               use_TF_or_LDA: If True, then at T=0 the TF approximation is used to update n(r) and at T>0 the LDA is used.
+                              If False, then functional minimization is used to update n(r), either energy functional
+                              minimization if T=0, or RDMFT if T>0. Defaults to True.
+               init_with_TF_or_LDA: If True and use_TF_or_LDA=False, then TF or LDA is used to initialize the density before
+                                    starting the functional minimization. Defaults to True.
                max_iter: maximum number of iterations
                mu_convergence_threshold: We call the iterative procedure converged if the change in
                                          chemical potential from one iteration to the next is smaller than 
@@ -145,8 +156,10 @@ class FermiGas:
                               which iteration convergence was reached. Defaults to True.
         """
         # Approximation
-        self.use_LDA = use_LDA
-        self.use_TF = use_TF
+        self.use_TF_or_LDA = use_TF_or_LDA
+
+        if init_with_TF_or_LDA and not self.use_TF_or_LDA:
+            print("Initial n is calculated with the Thomas-Fermi approximation, then functional energy minimization is used.")
 
         # Set up convergence history list for the plot_convergence_history() method
         self.convergence_history_mu = [self.mu.value]
@@ -156,16 +169,16 @@ class FermiGas:
         iterator = tqdm(range(max_iter)) if show_progress else range(max_iter)
         for iteration in iterator: 
             # Update density n
-            if self.particle_props.T.value < 1e-3:
-                if use_TF:
-                    self._update_n_with_TF_approximation()
+            if self.use_TF_or_LDA or init_with_TF_or_LDA:
+                if self.particle_props.T.value < self.zero_T_threshold:
+                    self._update_n_with_TF_approximation() # Use TF approximation if T=0
                 else:
-                    self._update_n_with_E_functional_minimization()
-            elif self.use_LDA:
-                self._update_n_with_LDA(num_q_values, cutoff_factor)
+                    self._update_n_with_LDA(num_q_values, cutoff_factor) # Use LDA if T>0
             else:
-                raise NotImplementedError("Only LDA is implemented for non-zero T so far.")
-            
+                if self.particle_props.T.value < self.zero_T_threshold:
+                    self._calculate_n_with_E_functional_minimization() # Use energy functional minimization if T=0
+                else:
+                    raise NotImplementedError("RDMFT for T>0 is not implemented yet.")
             
             # Update the particle number
             self.N_particles = self.spatial_basis_set.integral(self.n_array)
@@ -210,6 +223,10 @@ class FermiGas:
             # Check convergence criterion
             if delta_mu_value < mu_convergence_threshold*np.abs(self.mu.value) and \
                np.abs(self.particle_props.N_particles-self.N_particles) < N_convergence_threshold*self.particle_props.N_particles:
+                if init_with_TF_or_LDA and not self.use_TF_or_LDA:
+                    init_with_TF_or_LDA = False # set to False to continue with functional minimization
+                    print("Initialization done. Now using energy functional minimization.")
+                    continue
                 if show_progress:
                     print(f"Convergence reached after {iteration} iterations.")
                 break
@@ -222,7 +239,11 @@ class FermiGas:
            chemical potential is smaller than the external trapping potential. Else, the density is given by
            the Thomas-Fermi approximation.
         """
+        # Find the region where the chemical potential is larger than the external trapping potential, i.e. the
+        # region where the density is non-zero.
         mask = (self.mu - self.V_trap_array) >= 0
+
+        # Calculate n(r) in the non-zero region using the TF approximation
         self.n_array = np.zeros_like(self.V_trap_array.value)
         self.n_array[mask] = (1/(6*np.pi**2) * ((2*self.particle_props.m/(hbar**2) * k_B) * \
                                      (self.mu - self.V_trap_array[mask]))**(3/2)).to(1/u.um**3).value
@@ -238,14 +259,10 @@ class FermiGas:
         """Update the density `n_array` using the local density approximation. This means unsing a semiclassical
            approximation to integrate the Fermi-Dirac distribution over momentum space, where we insert for the
            single-particle energy the classical expression eps(p,r) = p^2/2m + V_trap(r)."""
-        # Since we are at low temperature, integrating to infinite momentum is not necessary
-        # and will only lead to numerical problems since our excited particles have very low p
-        # and numerically we can only sum over a finite set of integrand evaluations and very
-        # likely just skip the region of interest (low p) und get out 0 from the integration.
-        # Thus we set a cutoff at p_cutoff = sqrt(cutoff_factor * 2*m*k_B*T) which corresponds to 
-        # an energy scale of p_cutoff^2/(2*m) = cutoff_factor * k_B*T. This is a good approximation
-        # since the Fermi-Dirac distribution is very steep and the integral is dominated by the
-        # regions around the Fermi energy, which is of the order of k_B*T.
+        # Since we are at low temperature, we don't want to integrate over the entire momentum space, but only over low p 
+        # as the FD distribution goes to zero very quickly for large p. Thus we set a cutoff at 
+        # p_cutoff = sqrt(cutoff_factor * 2*m*k_B*T) which corresponds to an energy scale of 
+        # p_cutoff^2/(2*m) = cutoff_factor * k_B*T. 
         p_cutoff = np.sqrt(cutoff_factor * 2*self.particle_props.m*k_B*self.particle_props.T).to(u.u*u.m/u.s)
         # use this momentum units to deal with numerical numbers roughly on the order ~1
 
@@ -254,17 +271,16 @@ class FermiGas:
         q_values = np.linspace(0, 1, num_q_values) 
         q_values = q_values[:, np.newaxis] # reshape to broadcast with spatial basis set later
 
-        # Integrate using Simpson's rule (I chose this over quad() because quad() only works for scalar
-        # integrands, but we have a 3d array of integrand values. So to use quad() we would need to loop
-        # over the spatial grid and call quad() for each grid point, which is very slow. Simpson() can
-        # integrate over the whole array at once in a vectorized way, which is much faster.)
-        integrand_values = self._integrand_FD(q_values, p_cutoff) #sparse.COO.from_numpy(self._integrand_FD(q_values, p_cutoff))
+        # Calculate integrand values for each spatial basis function and each q value
+        integrand_values = self._integrand_FD(q_values, p_cutoff)
 
-        # Check if integrand is zero at q=1 and integrate over q in the interval [0,1]
+        # Check if integrand is zero at q=1 to ensure the cutoff momentum is large enough
         max_integrand_val = np.max(integrand_values)
         max_integrand_val_at_q1 = np.max(integrand_values[-1,:])
         if max_integrand_val_at_q1 > 1e-10 * max_integrand_val: # Check if integrand is not zero at q=1
             print("WARNING: Integrating until q=1, but integrand is not zero at q=1. Consider increasing cutoff_factor.")
+
+        # Integrate using Simpson's rule to exploit vectorized implementation, which is not possible with scipy.integrate.quad()
         integral = simpson(integrand_values, q_values.flatten(), axis=0)
 
         # Update n_array
@@ -289,51 +305,78 @@ class FermiGas:
             Returns:
                 f: Integrand p_cutoff*4*pi*p^2*f(eps_p) for the integration over q in the interval [0,1]
         """
+        # Momentum p is given by the dimensionless integration variable q times the cutoff momentum
         p = q * p_cutoff
+
+        # Calculation of eps_p(r) in LDA approximation 
         eps_p = (p**2/(2*self.particle_props.m) / k_B).to(u.nK) + self.V_trap_array 
+
+        # Scaled integrand for the 1d integral over q in the interval [0,1]
         return p_cutoff.value*4*np.pi*p.value**2 / (np.exp((eps_p-self.mu) / self.particle_props.T) + 1) 
     
 
 
-    def _update_n_with_E_functional_minimization(
+    def _calculate_n_with_E_functional_minimization(
             self,
         ):
         assert self.n_array.unit == 1/u.um**3, "n_array must be in units of 1/um**3."
-        E_min = minimize(self._E_functional, self.n_array.value, jac=self._E_functional_deriv, method='CG')
+
+        # Calculate n(r) by minimizing the energy functional E[n(r)] = Ekin[n(r)] + Epot[n(r)] w.r.t. n(r)
+        bounds = [(0, None) for _ in range(self.spatial_basis_set.num_basis_funcs)] # n(r) must be positive everywhere
+        E_min = minimize(self._E_functional, self.n_array.value, jac=self._E_functional_deriv, bounds=bounds, method='L-BFGS-B')
         self.n_array = E_min.x * 1/u.um**3
 
-        N_particles = self.spatial_basis_set.integral(self.n_array)
-        print("N_particles: ", N_particles)
-        self.n_array *= self.particle_props.N_particles / N_particles
+        # Normalize n(r) to the total particle number N_particles, this only works at T=0. At T>0 we need something
+        # more sophisticated depending on the chemical potential mu, e.g. RDMFT.
+        self.n_array = self.n_array * self.particle_props.N_particles / self.spatial_basis_set.integral(self.n_array)
 
 
 
     def _E_functional(
             self,
             n_array: np.ndarray,
-    )-> float:
+            integrand_additional_array: Union[Quantity, None] = None,
+    )-> Union[float, Quantity]:
+        """Calculate the energy functional E[n] = Ekin[n] + Epot[n] for a given density `n_array` with
+
+           Ekin[n] = hbar**2/(2*m) int d^3r [(6*pi**2)**(5/3)/(10*pi**2) * n(r)^(5/3) + 1/36 * (grad(n(r)))**2 / n(r) + 1/3 * (laplacian(n(r))) 
+           Epot[n] = int d^3r V_eff(r)*n(r) with V_eff(r) = V_trap(r)
+
+           It is possible to add an additional integrand of the form V(r)*n(r) for some potential and some density to the Epot[n] 
+           term. This can be useful to include e.g. interactions with a density of fermions. 
+
+           Args:
+                n0_array: condensed density n(r) in units of [1/um**3]
+                integrand_additional_array: additional integrand to be added to the Epot[n0] term. Defaults to None.
+
+           Returns:
+                E: Energy functional E[n] in units of [nK]
+        """
+        # Convert n(r) to units of [1/um**3] if it has no unit attached
         unitless = False
         if not isinstance(n_array, Quantity):
             n_array = n_array * 1/u.um**3
             unitless = True
 
-        Ekin1 = (6*np.pi**2)**(5/3)/(10*np.pi**2) * self.spatial_basis_set.integral(self.spatial_basis_set.power(n_array, 5/3)) 
-
+        # Calculate the kinetic energy term in the E functional
         # I assume that n(r) defines a boundary surface in 3d space where it becomes zero and that (grad(n(r)))**2 / n(r)
-        # is zero beyond that surface since the gradient becomes zero even at infinitesimal distances beyond the surface.
-        # Since the boundary surface is a null set it doesn't contribute to the integral. Thus, we can integrate only 
-        # over the region where n(r) is non-zero, i.e. mask out the region where n(r) is zero.
-        integrand = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**5
+        # is zero beyond that surface. Thus, we can integrate only over the region where n(r) is non-zero, i.e. mask out the 
+        # region where n(r) is zero.
+        integrand_array = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**5
         mask = n_array > 0
-        integrand[mask] = self.spatial_basis_set.gradient_dot_gradient(n_array)[mask] / n_array[mask]
-        Ekin2 = 1/36 * self.spatial_basis_set.integral(integrand)
 
-        Ekin3 = 1/3 * self.spatial_basis_set.integral(self.spatial_basis_set.laplacian(n_array))
+        integrand_array[mask] = (6*np.pi**2)**(5/3)/(10*np.pi**2) * self.spatial_basis_set.power(n_array, 5/3)[mask] \
+                                + 1/36 * self.spatial_basis_set.gradient_dot_gradient(n_array)[mask] / n_array[mask] \
+                                + 1/3 * self.spatial_basis_set.laplacian(n_array)[mask]
+        Ekin = (hbar**2/(2*self.particle_props.m) * self.spatial_basis_set.integral(integrand_array) / k_B).to(u.nK)
+ 
+        # Calculate the potential energy term in the E functional
+        integrand_array = self.V_trap_array * n_array
+        if integrand_additional_array is not None:
+            integrand_array = integrand_array + integrand_additional_array
+        Epot = self.spatial_basis_set.integral(integrand_array).to(u.nK)
 
-        Ekin = (hbar**2/(2*self.particle_props.m) * (Ekin1 + Ekin2 + Ekin3) / k_B).to(u.nK)
-
-        Epot = self.spatial_basis_set.integral(n_array * self.V_trap_array).to(u.nK)
-
+        # Return total energy, if no unit was attached to n_array return energy also without unit
         if unitless:
             return (Ekin + Epot).value
         else:
@@ -344,28 +387,58 @@ class FermiGas:
     def _E_functional_deriv(
             self,
             n_array: np.ndarray,
-    ):
+            V_additional_array: Union[Quantity, None] = None,
+    ) -> Union[float, Quantity]:
+        """Calculate the functional derivative of the energy functional E[n] = Ekin[n] + Epot[n] w.r.t. n(r), i.e.
+           dE/dn(r) = dEkin/dn(r) + dEpot/dn(r) with
+           
+           dEkin/dn(r) = hbar**2/(2*m) [(6*pi**2)**(5/3)/(10*pi**2) * 5/3 * n(r)^(2/3) - 1/36 * (grad(n(r)))**2 / n(r)^2 - 2/3 * (laplacian(n(r))) / n(r)]
+           dEpot/dn(r) = V_eff(r) with V_eff(r) = V_trap(r)
+
+           It is possible to add an additional potential V(r) to the Epot[n] term. This can be useful to include e.g. 
+           interactions with a density of fermions. 
+
+           Note, that the functional derivative of the energy functional evaluated at the true density n(r) corresponds 
+           to the local chemical potential mu(r)! If we evaluate the functional derivative at the true density
+           n(r) at the position r corresponding to the minimum of the effective potential V_eff(r), we obtain the global
+           chemical potential mu, i.e. the energy necessary to add one particle to the system keeping entropy and volume 
+           fixed.
+
+           Args:
+                n_array: condensed density n0(r) in units of [1/um**3]
+                V_additional_array: additional potential to be added to the effective potential. Defaults to None.    
+
+           Returns:       
+                deriv_E: functional derivative of the energy functional E[n] w.r.t. n(r) in units of [nK]
+        """
+        # Convert n(r) to units of [1/um**3] if it has no unit attached
         unitless = False
         if not isinstance(n_array, Quantity):
             n_array = n_array * 1/u.um**3
             unitless = True
 
-        grad_Ekin1 = (6*np.pi**2)**(5/3)/(10*np.pi**2) * 5/3 * self.spatial_basis_set.power(n_array, 2/3)
-
-        grad_Ekin2 = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**2
+        # Calculate functional derivative of the kinetic energy term in the E functional w.r.t. n(r)
+        # I assume that n(r) defines a boundary surface in 3d space where it becomes zero and that (grad(n(r)))**2 / n(r)**2
+        # as well as laplacian(n(r)) / n(r) are zero beyond that surface. Thus, we can integrate only over the region where 
+        # n(r) is non-zero, i.e. mask out the region where n(r) is zero.
+        deriv_Ekin = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**2
         mask = n_array > 0
-        grad_Ekin2[mask] = -1/36 * (self.spatial_basis_set.gradient_dot_gradient(n_array)[mask] \
-                                / self.spatial_basis_set.power(n_array, 2)[mask] + \
-                                2 * self.spatial_basis_set.laplacian(n_array)[mask] / n_array[mask])
+        deriv_Ekin[mask] = (6*np.pi**2)**(5/3)/(10*np.pi**2) * 5/3 * self.spatial_basis_set.power(n_array, 2/3)[mask] \
+                            - 1/36 * (self.spatial_basis_set.gradient_dot_gradient(n_array)[mask] \
+                            / self.spatial_basis_set.power(n_array, 2)[mask] + \
+                            2 * self.spatial_basis_set.laplacian(n_array)[mask] / n_array[mask])
+        deriv_Ekin = (hbar**2/(2*self.particle_props.m) / k_B * deriv_Ekin).to(u.nK)
 
-        grad_Ekin = (hbar**2/(2*self.particle_props.m) * (grad_Ekin1 + grad_Ekin2) / k_B).to(u.nK)
+        # Calculate functional derivative of the potential energy term in the E functional w.r.t. n(r)
+        deriv_Epot = self.V_trap_array
+        if V_additional_array is not None:
+            deriv_Epot = deriv_Epot + V_additional_array
 
-        grad_Epot = self.V_trap_array
-
+        # Return total functional derivative, if no unit was attached to n_array return functional derivative also without unit
         if unitless:
-            return (grad_Ekin + grad_Epot).value
+            return (deriv_Ekin + deriv_Epot).value
         else:
-            return grad_Ekin + grad_Epot
+            return deriv_Ekin + deriv_Epot
         
 
 
@@ -513,20 +586,23 @@ class FermiGas:
             im.append(axs[0].pcolormesh(x, y, nxy))
             axs[0].set_title(r'$n(x,y,0)$', fontsize=18)
             axs[0].set_aspect('equal', adjustable='box')
+            axs[0].set_xlabel('x [μm]', fontsize=12)
+            axs[0].set_ylabel('y [μm]', fontsize=12)
 
             im.append(axs[1].pcolormesh(x, z, nxz))
             axs[1].set_title(r'$n(x,0,z)$', fontsize=18)
             axs[1].set_aspect('equal', adjustable='box')
+            axs[1].set_xlabel('x [μm]', fontsize=12)
+            axs[1].set_ylabel('z [μm]', fontsize=12)
 
             im.append(axs[2].pcolormesh(y, z, nyz))
             axs[2].set_title(r'$n(0,y,z)$', fontsize=18)
             axs[2].set_aspect('equal', adjustable='box')
+            axs[2].set_xlabel('y [μm]', fontsize=12)
+            axs[2].set_ylabel('z [μm]', fontsize=12)
 
             # Set labels and colorbars for each plot
             for i, ax in enumerate(axs):
-                ax.set_xlabel('y [μm]' if i != 2 else 'z [μm]', fontsize=12)
-                ax.set_ylabel('x [μm]' if i != 2 else 'y [μm]', fontsize=12)
-
                 divider = make_axes_locatable(ax)
                 cax = divider.append_axes("right", size="5%", pad=0.05)
                 cbar = fig.colorbar(im[i], cax=cax)

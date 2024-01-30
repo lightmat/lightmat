@@ -40,10 +40,9 @@ class BoseFermiGas:
 
     def eval_density(
             self,
-            bosons_use_TF: bool = False,
-            bosons_use_Popov: bool = False,
-            fermions_use_TF: bool = False,
-            fermions_use_LDA: bool = True,
+            bosons_use_TF: bool = True,
+            bosons_use_HF: bool = True,
+            fermions_use_TF_or_LDA: bool = True,
             max_iter: int = 1000,
             mu_convergence_threshold: float = 1e-5,
             N_convergence_threshold: float = 1e-3,
@@ -56,9 +55,8 @@ class BoseFermiGas:
         ):
         # Approximations
         self.bosons_use_TF = bosons_use_TF
-        self.bosons_use_Popov = bosons_use_Popov
-        self.fermions_use_TF = fermions_use_TF
-        self.fermions_use_LDA = fermions_use_LDA
+        self.bosons_use_HF = bosons_use_HF
+        self.fermions_use_TF_or_LDA = fermions_use_TF_or_LDA
 
         # Set up convergence history list for the plot_convergence_history() method
         self.bose_gas.convergence_history_mu = [self.bose_gas.mu.value]
@@ -69,9 +67,7 @@ class BoseFermiGas:
         # Run iterative procedure to update the densities
         iterator = tqdm(range(max_iter)) if show_progress else range(max_iter)
         for iteration in iterator: 
-            # Initialize boson n_ex_array with zeros in first iteration
-            if iteration == 0:
-                    self.bose_gas.n_ex_array = np.zeros(self.spatial_basis_set.num_basis_funcs) * 1/u.um**3
+            pass
 
             
 
