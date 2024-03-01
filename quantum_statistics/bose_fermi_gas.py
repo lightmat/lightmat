@@ -54,9 +54,9 @@ class BoseFermiGas:
             show_progress: bool = True,
         ):
         # Approximations
-        self.bosons_use_TF = bosons_use_TF
-        self.bosons_use_HF = bosons_use_HF
-        self.fermions_use_TF_or_LDA = fermions_use_TF_or_LDA
+        self.bose_gas.use_TF = bosons_use_TF
+        self.bose_gas.use_HF = bosons_use_HF
+        self.fermi_gas.use_TF_or_LDA = fermions_use_TF_or_LDA
 
         # Set up convergence history list for the plot_convergence_history() method
         self.bose_gas.convergence_history_mu = [self.bose_gas.mu.value]
@@ -79,49 +79,51 @@ class BoseFermiGas:
             cutoff_factor: float,
             mu_change_rate: float,
     ):
-        # Update boson condensed density n0
-        if self.bosons_use_TF:
-            self.bose_gas._update_n0_with_TF_approximation()
-        else:
-            self.bose_gas._update_n0_with_E_functional_minimization()
+       # Update condensed density n0
+            if self.bose_gas.use_TF or init_with_TF:
+                self._update_n0_with_TF_approximation()  
+            else:
+                if self.particle_props.T.value <= self.zero_T_threshold: # Energy functional minimization is only implemented for T=0
+                    self._calculate_n0_with_E_functional_minimization()
+                else:
+                    raise NotImplementedError("Energy functional minimization is only implemented for T=0. RDMFT is not implemented yet.")
             
-        # Update boson non-condensed density n_ex if T>0 (otherwise we have n_ex=0)
-        if self.bose_props.T.value > 1e-3:
-            self.bose_gas._update_n_ex(num_q_values, cutoff_factor) # This uses either the semiclassical HF or Popov approximation
-                                                                    # depending on the self.bosons_use_Popov flag.
+            # Update non-condensed density n_ex if T>0 (otherwise we have n_ex=0)
+            if self.particle_props.T.value > self.zero_T_threshold:
+                self._update_n_ex(num_q_values, cutoff_factor) # This uses either the semiclassical HF or Popov approximation
+                                                               # depending on the self.use_HF flag.
             
-        # Update the boson total density n = n0 + nex
-        self.bose_gas.n_array = self.bose_gas.n0_array + self.bose_gas.n_ex_array
+            # Update the total density n = n0 + nex
+            self.n_array = self.n0_array + self.n_ex_array
 
-        # Update the boson particle numbers
-        self.bose_gas.N_particles = self.spatial_basis_set.integral(self.bose_gas.n_array)
-        self.bose_gas.N_particles_condensed = self.spatial_basis_set.integral(self.bose_gas.n0_array)
-        self.bose_gas.N_particles_thermal = self.spatial_basis_set.integral(self.bose_gas.n_ex_array)
-        self.bose_gas.condensate_fraction = self.bose_gas.N_particles_condensed / self.bose_gas.N_particles
+            # Update the particle numbers
+            self.N_particles = self.spatial_basis_set.integral(self.n_array)
+            self.N_particles_condensed = self.spatial_basis_set.integral(self.n0_array)
+            self.N_particles_thermal = self.spatial_basis_set.integral(self.n_ex_array)
+            self.condensate_fraction = self.N_particles_condensed / self.N_particles
 
-        # Do soft update of the chemical potential mu based on normalization condition int dV (n0 + nex) = N_particles.
-        # This increases mu, if N_particles is too small w.r.t N_particles_target and decreases mu if N_particles is
-        # too large w.r.t. N_particles_target.
-        new_mu_direction = (self.bose_props.N_particles - self.bose_gas.N_particles) / self.bose_props.N_particles * u.nK 
-        self.bose_gas.mu += mu_change_rate * new_mu_direction
+            # Do soft update of the chemical potential mu based on normalization condition int dV (n0 + nex) = N_particles.
+            # This increases mu, if N_particles is too small w.r.t N_particles_target and decreases mu if N_particles is
+            # too large w.r.t. N_particles_target.
+            new_mu_direction = (self.particle_props.N_particles - self.N_particles) / self.particle_props.N_particles * u.nK 
+            self.mu += self.mu_change_rate * new_mu_direction
 
-        # Calculate convergence info
-        delta_mu_value = np.abs(self.bose_gas.mu.value - self.bose_gas.convergence_history_mu[-1]) 
-        self.bose_gas.convergence_history_mu.append(self.bose_gas.mu.value)
-        self.bose_gas.convergence_history_N.append(self.bose_gas.N_particles)
+            # Calculate convergence info
+            delta_mu_value = np.abs(self.mu.value - self.convergence_history_mu[-1]) 
+            self.convergence_history_mu.append(self.mu.value)
+            self.convergence_history_N.append(self.N_particles)
 
             # Print convergence info every other iteration
             if print_convergence_info_at_this_iteration > 0:
                 if iteration % print_convergence_info_at_this_iteration == 0:
                     print(f"Iteration {iteration}:")
-                    print('BOSONS:')
-                    print('N: ', self.bose_gas.N_particles)
-                    print('N_condensed: ', self.bose_gas.N_particles_condensed)
-                    print('N_thermal: ', self.bose_gas.N_particles_thermal)
-                    print('mu: ', self.bose_gas.mu)
+                    print('N: ', self.N_particles)
+                    print('N_condensed: ', self.N_particles_condensed)
+                    print('N_thermal: ', self.N_particles_thermal)
+                    print('mu: ', self.mu)
                     print('delta_mu: ', delta_mu_value)
                     print('new_mu_direction: ', new_mu_direction)
-                    print('mu_change_rate: ', mu_change_rate)
+                    print('mu_change_rate: ', self.mu_change_rate)
                     print("\n")
 
             # Dynamically adjust `mu_change_rate` based on recent changes
@@ -129,18 +131,22 @@ class BoseFermiGas:
                 # Check for oscillations in mu
                 oscillating = False
                 for i in range(1, 5): # Check if mu was oscillating over last 4 iterations
-                    if  (self.bose_gas.convergence_history_mu[-i] - self.bose_gas.convergence_history_mu[-i-1]) * \
-                        (self.bose_gas.convergence_history_mu[-i-1] - self.bose_gas.convergence_history_mu[-i-2]) < 0:
+                    if  (self.convergence_history_mu[-i] - self.convergence_history_mu[-i-1]) * \
+                        (self.convergence_history_mu[-i-1] - self.convergence_history_mu[-i-2]) < 0:
                         oscillating = True
                         break
                 if oscillating: # If oscillating, decrease the change rate to stabilize
-                    mu_change_rate *= 0.5 
+                    self.mu_change_rate *= 0.5 
                 else: # If not oscillating, increase the change rate to speed up convergence
-                    mu_change_rate *= 2 
+                    self.mu_change_rate *= 2 
 
             # Check convergence criterion
-            if delta_mu_value < mu_convergence_threshold*np.abs(self.bose_gas.mu.value) and \
-               np.abs(self.bose_props.N_particles-self.bose_gas.N_particles) < N_convergence_threshold*self.bose_props.N_particles:
+            if delta_mu_value < mu_convergence_threshold*np.abs(self.mu.value) and \
+               np.abs(self.particle_props.N_particles-self.N_particles) < N_convergence_threshold*self.particle_props.N_particles:
+                if init_with_TF and not self.use_TF:
+                    init_with_TF = False # set to False to continue with energy functional minimization
+                    print("Initialization done. Now using energy functional minimization.")
+                    continue
                 if show_progress:
                     print(f"Convergence reached after {iteration} iterations.")
                 break

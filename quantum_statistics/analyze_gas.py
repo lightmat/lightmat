@@ -157,13 +157,14 @@ def ring_beam_trap(
         X: Union[float, np.ndarray],
         Y: Union[float, np.ndarray],
         Z: Union[float, np.ndarray],
-        ring_radius: float = 30.0,
+        ring_radius: float = 40.0,
         waist_xy: float = 6.0,
         waist_z: float = 13.0,
         flat_z: float = 5.0,
         blue_trap_height: float = 300.0,
         red_trap_depth: float = 100.0,
         inhomogeneity: float = 0.01,
+        central_height: float = 100.0,
         seed: int = 42
 ):
     # Ensure X, Y, Z are numpy arrays
@@ -186,6 +187,10 @@ def ring_beam_trap(
 
     # Combine the XY and Z potentials
     V_trap = Vxy + Vz
+
+    central_waist = 5
+    central_gaussian = np.exp(-2 * (R**2 + Z**2) / central_waist**2)
+    V_trap += central_height * central_gaussian / np.max(central_gaussian)
 
     # Add noise
     np.random.seed(seed)

@@ -1,16 +1,8 @@
-from astropy import units as u
-from astropy.constants import c, eps0
-import numpy as np
-from typing import Union
-from collections.abc import Sequence
-from .lattice import Lattice
+from .gaussianbeam import GaussianBeam
 
+class Lattice1d(GaussianBeam):
 
-
-class Lattice1d(Lattice):
-
-    def __init(
+    def __init__(
             self,
     ) -> None:
-        
         pass

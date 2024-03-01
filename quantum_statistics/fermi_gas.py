@@ -156,7 +156,8 @@ class FermiGas:
                               which iteration convergence was reached. Defaults to True.
         """
         # Approximation
-        self.use_TF_or_LDA = use_TF_or_LDA
+        if not hasattr(self, 'use_TF_or_LDA'):
+            self.use_TF_or_LDA = use_TF_or_LDA
 
         if init_with_TF_or_LDA and not self.use_TF_or_LDA:
             print("Initial n is calculated with the Thomas-Fermi approximation, then functional energy minimization is used.")

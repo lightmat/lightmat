@@ -8,546 +8,440 @@ from collections.abc import Sequence
 
 class GaussianBeam(object):
     """
-    A class representing a Gaussian laser beam with various initialization parameters.
+    A class representing a Gaussian laser beam.
     In the local coordinate system of this GaussianBeam instance, the beam propagates along the local
-    z-direction and the polarization Jones vector is in the local x-y-plane such that horizontal polarization
-    is along the local x-direction and the vertical polarization along the local y-direction respectively. 
-    The attribute _rotation_matrix transforms from the local coordinate system to the global standard Carteesian
-    coordinate system.
-    Note, that in principle the rotation matrix is ambiguous because the Jones vector in the 
-           orthogonal subspace to beam_direction has an arbitrary 2d basis in general. We choose the 
-           following convention for the 3d polarization vector at the 3 beam directions (1,0,0), (0,1,0) 
-           and (0,0,1) respectively:
-           Beam along x-axis: Linear horizontal polarization -> pol_vec = (0,1,0)
-                              Linear vertical polarization -> pol_vec = (0,0,1)
-           Beam along y-axis: Linear horizontal polarization -> pol_vec = (1,0,0)
-                              Linear vertical polarization -> pol_vec = (0,0,-1)
-           Beam along z-axis: Linear horizontal polarization -> pol_vec = (1,0,0)
-                              Linear vertical polarization -> pol_vec = (0,1,0)
-                              
-    The beam is initialized with the following parameters:
-    
-    One of the following must be provided for electromagnetic properties:
-    - Wavelength (lambda_)
-    - Frequency (nu)
-    - Angular frequency (w)
-    - Wavenumber (k)
+    z-direction and the polarization Jones vector is in the local x-y-plane with the convention that horizontal 
+    polarization is along the local x-direction and the vertical polarization along the local y-direction respectively. 
+    The attribute ``_rotation_matrix`` transforms from the local coordinate system to the global standard Carteesian
+    coordinate system given by the basis (1,0,0), (0,1,0), (0,0,1).
 
-    One of the following must be provided for beam geometry:
-    - Beam waist diameter (w0)
-    - Rayleigh length (z_R)
-    - Beam divergence angle (theta)
-    
-    One of the following must be provided for beam power attributes:
-    - Beam power (P)
-    - Intensity (I0)
-    - Electric field strength (E0)
+    Note, that in principle the rotation matrix is ambiguous because the Jones vector in the orthogonal subspace to 
+    ``beam_direction_vec`` has an arbitrary 2d basis in general. As mentioned above, we choose the following convention 
+    in the local coordinate system of the GaussianBeam instance:
+    Beam along local z-axis: Linear horizontal polarization -> ``pol_Jones_vec`` = (1,0) and ``pol_3d_vec`` = (1,0,0)
+                             Linear vertical polarization -> ``pol_Jones_vec`` = (0,1) and ``pol_3d_vec`` = (0,1,0)
 
-    The following parameters do not necessarily need to be provided and have default values:
-    - beam_direction: Direction of the beam in global coorinate system. Defaults to [0, 0, 1].
-    - pol: Polarization of the beam as 2d Jones vector (perpendicular to beam_direction). 
-           Defaults to 'linear horizontal'.
-    - w0_zpos: Position of the beam waist, i.e. distance from origin along beam_direction. 
-               Defaults to 0*astropy.units.meter.
+    Of course, in any case ``pol_3d_vec`` is perpendicular to ``beam_direction_vec``, both in the local coordinate
+    system of the GaussianBeam instance and the global standard Carteesian coordiante system.
 
-    Example for a Gaussian beam along x-direction with right-hand circular polarization, wavelength 800 nm, 
-    beam waist diameter 1 mm and peak power 5 mW:
+    ----------------------------------------------------------------------------------------------------------------------
 
-    >>> import astropy.units as u
-    >>> from gaussianbeam import GaussianBeam
-    >>> beam = GaussianBeam(
-                        beam_direction=[1, 0, 0], 
-                        pol='circular right', 
-                        lambda_=800*u.nm, 
-                        w0=(1*u.mm, 300*u.um), 
-                        P=5*u.mW
-                    )
+    Parameters:
+        beam_direction_vec (array_like): 3d vector specifying the beam propagation in the global standard Carteesian 
+                                         coordinate system.
+        pol_Jones_vec (array_like): 2d vector specifying the polarization of the beam in the local coordinate system
+                                    where the beam propagates along the local z-direction. The convention is that the
+                                    horizontal polarization is along the local x-direction and the vertical polarization
+                                    along the local y-direction.
+        lambda_ (astropy.Quantity, float): Wavelength of the beam in [nm]. 
+        w0 (astropy.Quantity, float): Beam waist diameter in [um]. Either a scalar for circular beams or a sequence of two floats for
+                                      elliptical beams having different beam waist diameters in local x- and y-direction.
+        P (astropy.Quantity, float): Power of the beam in [W].
+        z0 (astropy.Quantity, float): Position of the beam waist in [um] along the beam propagation direction. 
+                                      Defaults to 0um.       
 
-    -----------------------------------------------------------------------------------------------------------
+    ----------------------------------------------------------------------------------------------------------------------
 
     Attributes:
-        beam_direction (np.ndarray): Direction of the beam in global coorinate system (3d vector)
-        pol (np.ndarray): Polarization of the beam as 2D Jones vector (ux, uy) in the frame where 
-                          beam_direction points along z-dir, e.g.: (1, 0) == 'linear horizontal', 
-                          (0, 1) == 'linear vertical', 1/sqrt(2)*(1, i) == 'circular left', 
-                          1/sqrt(2)*(1, -i) == 'circular right' 
-        lambda_ (astropy.units.Quantity): Wavelength of the beam.
-        nu (astropy.units.Quantity): Frequency of the beam.
-        w (astropy.units.Quantity): Angular frequency of the beam.
-        k (astropy.units.Quantity): Wavenumber of the beam.
-        w0 (astropy.units.Quantity or Sequence[astropy.units.Quantity]): Beam waist diameter. If it's a 2d Sequence, than an 
-                                                                         elliptical beam gets defined, where w0[0] is the beam
-                                                                         waist in horizontal direction and w0[1] the beam waist 
-                                                                         in vertical direction.
-        z_R (astropy.units.Quantity): Rayleigh length.
-        theta (astropy.units.Quantity): Beam divergence angle.
-        P (astropy.units.Quantity): Beam power.
-        I0 (astropy.units.Quantity): Peak intensity.
-        E0 (astropy.units.Quantity): Peak electric field strength.
-        w0_zpos (astropy.units.Quantity): Position of the beam waist, i.e. distance from origin along 
-                                          beam_direction.
-        k_vec (astropy.units.Quantity): Wave vector of the beam in global coordinate system.
-        rotation_matrix (np.ndarray): Rotation matrix to transform from local to global coordinate system.
-        pol_vec (np.ndarray): 3D polarization vector in global coordinate system (of course this is perpendicular
-                              to the beam_direction vector in the global coordinate system).
+        beam_direction_vec (np.ndarray): 3d vector specifying the beam propagation in the global standard Carteesian 
+                                         coordinate system.
+        pol_Jones_vec (np.ndarray): 2d vector specifying the polarization of the beam in the 2d plane perpedicular to
+                                    ``beam_direction_vec``. The convention is that the horizontal polarization is along the 
+                                    local x-direction and the vertical polarization along the local y-direction.
+        pol_3d_vec (np.ndarray): 3d vector specifying the polarization of the beam in the global standard Carteesian
+                                 coordinate system. It is perpendicular to ``_beam_direction_vec``.
+        lambda_ (astropy.Quantity): Wavelength of the beam in [nm]. 
+        w0 (astropy.Quantity): Beam waist diameter in [um]. Either a scalar for circular beams or a sequence of two floats for
+                               elliptical beams having different beam waist diameters in local x- and y-direction.
+        P (astropy.Quantity): Power of the beam in [W].
+        z0 (astropy.Quantity): Position of the beam waist in [um] along the beam propagation direction. 
+                                Defaults to 0um.
+        k (astropy.Quantity): Wave number of the beam in [1/um].
+        k_vec (astrophy.Quantity): 3d wave vector of the beam in [1/um] in the global standard Carteesian coordinate system. 
+                                   It is parallel to ``_beam_direction_vec`` and perpendicular to ``pol_3d_vec``.
+        omega (astropy.Quantity): Angular frequency of the beam in [THz].
+        nu (astropy.Quantity): Frequency of the beam in [THz].
+        z_R (astropy.Quantity): Rayleigh range of the beam in [um].
+        theta (astropy.Quantity): Divergence angle of the beam in [rad].
+        I0 (astropy.Quantity): Peak intensity of the beam in [mW/cm^2].
+        E0 (astropy.Quantity): Peak electric field strength of the beam in [V/m].
+        _rotation_matrix (array_like): 3x3 matrix that transforms from the local coordinate system of the GaussianBeam 
+                                       instance where propagation is along local z-direction to the global standard Carteesian 
+                                       coordinate system. 
 
-    -----------------------------------------------------------------------------------------------------------
+    ----------------------------------------------------------------------------------------------------------------------
 
     Methods:
-
+        w(z_local): Calculate the beam diameter at the position(s) ``z_local`` in the local coordinate system of the GaussianBeam instance.
+        R(z_local): Calculate the radius of curvature of the beam at the position(s) ``z_local`` in the local coordinate system.
+        Psi(z_local): Calculate the Gouy phase of the beam at the position(s) ``z_local`` in the local coordinate system.
+        E(x,y,z): Returns the electric field strength of the beam at the position (x,y,z) in [V/m]. Here, x, y, z are 
+                  the global standard Carteesian coordinates in [um] and can be either float or array obtained from np.meshgrid().
+        E_vec(x,y,z): Returns the electric field vector of the beam at the position (x,y,z) in [V/m] in the standard
+                      Carteesian coordinate system. This is just the electric field strength multiplied by ``pol_3d_vec``. 
+                      Here, x, y, z are the global standard Carteesian coordinates in [um] and can be either float or array
+                      obtained from np.meshgrid().
+        I(x,y,z): Returns the intensity of the beam at the position (x,y,z) in [W/m^2]. Here, x, y, z are the global
+                  standard Carteesian coordinates in [um] and can be either float or array obtained from np.meshgrid().
     """
-
     def __init__(
-            self, 
-            beam_direction: Sequence[float] = np.array([0, 0, 1]),
-            pol: Union[str, Sequence[complex]] = 'linear horizontal', 
-            lambda_: Union[u.Quantity, None] = None,
-            nu: Union[u.Quantity, None] = None,
-            w: Union[u.Quantity, None] = None,
-            k: Union[u.Quantity, None] = None,
-            w0: Union[u.Quantity, Sequence[u.Quantity], None] = None,
-            z_R: Union[u.Quantity, None] = None,
-            theta: Union[u.Quantity, None] = None,
-            P: Union[u.Quantity, None] = None,
-            I0: Union[u.Quantity, None] = None,
-            E0: Union[u.Quantity, None] = None,
-            w0_zpos: u.Quantity = 0*u.m,
-        ) -> None:
-        """Initialize a GaussianBeam object.
-        
-            Parameters:
-                beam_direction (Sequence[float]): Direction of the beam in global coorinate system. 
-                                                  Must be a 3D vector. Defaults to [0, 0, 1].
-                pol (str or Sequence[float]): Polarization of the beam. If str, must be one of the following: 
-                                              'linear horizontal', 'linear vertical', 'circular left', 
-                                              'circular right'. If Sequence[float], must be a 2D Jones vector 
-                                              (ux, uy) in the frame where beam_direction points along z-dir, e.g.:
-                                              (1, 0) == 'linear horizontal', 
-                                              (0, 1) == 'linear vertical', 
-                                              1/sqrt(2)*(1, i) == 'circular left', 
-                                              1/sqrt(2)*(1, -i) == 'circular right' 
-                                              Note, that circular right/left is from the point of view of the 
-                                              receiver, not the source. Defaults to 'linear horizontal'.
-                lambda_ (astropy.units.Quantity or None): Wavelength of the beam. Defaults to None.
-                nu (astropy.units.Quantity or None): Frequency of the beam. Defaults to None.
-                w (astropy.units.Quantity or None): Angular frequency of the beam. Defaults to None.
-                k (astropy.units.Quantity or None): Wavenumber of the beam. Defaults to None.
-                w0 (astropy.units.Quantity or Sequence[astropy.units.Quantity] or None): Beam waist diameter. If a 2d Sequence
-                                                                                         is provided, than an elliptical beam
-                                                                                         gets defined, where w0[0] is the beam
-                                                                                         waist in horizontal direction and w0[1]
-                                                                                         the beam waist in vertical direction.
-                                                                                         Defaults to None.
-                z_R (astropy.units.Quantity or None): Rayleigh length. Defaults to None.
-                theta (astropy.units.Quantity or None): Beam divergence angle. Defaults to None.
-                P (astropy.units.Quantity or None): Peak power. Defaults to None.
-                I0 (astropy.units.Quantity or None): Peak intensity. Defaults to None.
-                E0 (astropy.units.Quantity or None): Peak electric field strength. Defaults to None.
-                w0_zpos (astropy.units.Quantity): Position of the beam waist, i.e. distance from origin along 
-                                                  beam_direction. Defaults to 0*astropy.units.meter.
-                
-            Returns:
-                GaussianBeam: A GaussianBeam object.
-        """
-        self._beam_direction = beam_direction
-        self._pol = pol
-        self._lambda_ = lambda_
-        self._nu = nu
-        self._w = w
-        self._k = k
-        self._w0 = w0
-        self._z_R = z_R
-        self._theta = theta
-        self._P = P
-        self._I0 = I0
-        self._E0 = E0
-        self._w0_zpos = w0_zpos
-
-        self._check_input()
-        self._initialize_beam()
-
-        self._k_vec = self._k * self._beam_direction
-        self._rotation_matrix = self._calculate_rotation_matrix() # Rotation matrix to transform from local
-                                                                  # to global coordinate system
-        self._pol_vec = self._rotation_matrix @ np.array([self._pol[0], self._pol[1], 0]) # 3D polarization vector
-        assert self._beam_direction @ self._pol_vec < 1e-12, "pol vector must be perpendicular to beam_direction" 
-
-
-    # Electromagnetic properties
-    @property
-    def lambda_(self):
-        return self._lambda_        
-    
-    @property
-    def nu(self):
-        return self._nu
-    
-    @property
-    def w(self):
-        return self._w
-
-    @property
-    def k(self):
-        return self._k
-        
-
-    # Beam geometry
-    @property
-    def w0(self):
-        return self._w0
-
-    @property
-    def z_R(self):
-        return self._z_R
-        
-    @property
-    def theta(self):
-        return self._theta
-
-            
-    # Beam power 
-    @property
-    def P(self):
-        return self._P     
-
-    @property
-    def I0(self):
-        return self._I0
-        
-    @property
-    def E0(self):
-        return self._E0 
-    
-    @property
-    def pol(self):
-        return self._pol
-    
-    @property
-    def w0_zpos(self):
-        return self._w0_zpos
-    
-    # Polarization and beam direction
-    @property
-    def beam_direction(self):
-        return self._beam_direction
-    
-    @property
-    def k_vec(self):
-        return self._k_vec
-    
-    @property
-    def rotation_matrix(self):
-        return self._rotation_matrix
-    
-    @property
-    def pol_vec(self):
-        return self._pol_vec
-
-    
-    # Methods
-
-    def E_field_amplitude(
             self,
-            x: u.Quantity,
-            y: u.Quantity,
-            z: u.Quantity,
-    ) -> u.Quantity:
-        """Calculate the electric field strength of the Gaussian beam at the given position. The complex 
-           E-field vector can then be obtained as: Evec(x,y,z) = E(x,y,z) * pol_vec
+            beam_direction_vec: Sequence[float],
+            pol_Jones_vec: Sequence[float],
+            lambda_: Union[u.Quantity, float],
+            w0: Union[u.Quantity, float, Sequence[float], np.ndarray],
+            P: Union[u.Quantity, float],
+            z0: Union[u.Quantity, float] = 0 * u.um,
+    ) -> None:
+        """Initializes a GaussianBeam instance.
         
-            Parameters:
-                x (astropy.units.Quantity): x-coordinate of the position.
-                y (astropy.units.Quantity): y-coordinate of the position.
-                z (astropy.units.Quantity): z-coordinate of the position.
-                
-            Returns:
-                astropy.units.Quantity]: Electric field strength of the Gaussian beam at the given position.
+           Args:
+                beam_direction_vec: 3d vector specifying the beam propagation in the global standard Carteesian 
+                                    coordinate system.
+                pol_Jones_vec: 2d vector specifying the polarization of the beam in the local coordinate system
+                               where the beam propagates along the local z-direction. The convention is that the
+                               horizontal polarization is along the local x-direction and the vertical polarization
+                               along the local y-direction.
+                lambda_: Wavelength of the beam in [nm]. 
+                w0: Beam waist diameter in [um]. Either a scalar for circular beams or a sequence of two floats for
+                    elliptical beams having different beam waist diameters in local x- and y-direction.
+                P: Power of the beam in [W].
+                z0: Position of the beam waist in [um] along the beam propagation direction. Defaults to 0um.
+
+           Returns:
+                None           
         """
+        # Define attributes and check input
+        self.beam_direction_vec = np.array(beam_direction_vec)
+        self.pol_Jones_vec = np.array(pol_Jones_vec)
+        self.lambda_ = lambda_
+        self.w0 = w0
+        self.P = P
+        self.z0 = z0
+        self._check_input('init')
 
-        # Check input
-        for c in [x, y, z]:
-            if not isinstance(c, u.Quantity):
-                raise TypeError("x, y and z must be an instance of astropy.units.Quantity.")
-            else:
-                if not c.unit.is_equivalent(u.m):
-                    raise ValueError("x, y and z must be of unit equivalent to meter.")
-                else:
-                    x = x.to(u.mm)
-                    y = y.to(u.mm)
-                    z = z.to(u.mm)
+        # Calculate derived attributes
+        self.k = (2*np.pi / (self.lambda_)).to(1/u.um)
+        self.k_vec = self.k * self.beam_direction_vec
+        self.omega = (2*np.pi * c / self.lambda_).to(u.THz)
+        self.nu = (self.omega / (2*np.pi)).to(u.THz)
+        self.z_R = (np.pi * self.w0**2 / self.lambda_).to(u.um)
+        self.theta = (self.lambda_ / (np.pi * self.w0)).value
+        self.I0 = (2 * self.P / (np.pi * self.w0**2)).to(u.mW/u.cm**2)
+        self.E0 = (np.sqrt(2 * self.I0 / (eps0 * c))).to(u.V/u.m)
 
-        # Transform position from global to local coordinate system
-        pos = np.array([x.value, y.value, z.value]) 
-        pos = np.transpose(self._rotation_matrix) @ pos
-        x = pos[0] * u.mm
-        y = pos[1] * u.mm
-        z = pos[2] * u.mm
+        self._rotation_matrix = self._calculate_rotation_matrix() 
+        self.pol_3d_vec = self._rotation_matrix @ np.array([self.pol_Jones_vec[0], self.pol_Jones_vec[1], 0])
+        self.pol_3d_vec = self.pol_3d_vec / np.linalg.norm(self.pol_3d_vec)  # Normalize
 
-        if not isinstance(self.w0, Sequence):
-            # Calculate electric field strength (see https://en.wikipedia.org/wiki/Gaussian_beam)
-            r = np.sqrt(x**2 + y**2)
-            wz = self._w0 * np.sqrt(1 + (z - self._w0_zpos)**2 / self._z_R**2)
-            one_over_Rz = z / (z**2 + self._z_R**2)
-            Psiz = np.arctan((z - self._w0_zpos) / self._z_R).value # arctan gives u.rad unit, we just need the value
-            E = self._E0 * self._w0/wz * np.exp(-r**2 / wz**2) * np.exp(-1j * (self._k*(z-self._w0_zpos)) \
-                                                                        + self._k*r**2*one_over_Rz/2 - Psiz)
-        else:
-            # TODO: Implement elliptical beam shape
-            pass
+        # Sanity checks for vector directions
+        assert np.isclose(self.beam_direction_vec @ self.pol_3d_vec, 0), "The beam direction and the 3d polarization vector must be perpendicular."
+        assert np.isclose(self.beam_direction_vec @ self.k_vec.value, self.k.value), "The beam direction and the wave vector must be parallel."
+        
+
+
+    def w(
+            self,
+            z_local: Union[float, Sequence[float], np.ndarray, u.Quantity],
+    ) -> u.Quantity:
+        """Calculate the beam diameter at the position(s) ``z_local`` in the local coordinate system of the GaussianBeam instance, i.e.
+           at distance ``z_local``-``z0`` from the beam waist diameter ``w0`` along the beam propagation direction in the global
+           standard Carteesian coordinate system. For circular beams, the beam diameter is a scalar, for elliptical beams
+           it comprises two scalars for the local x- and y-direction respectively.
+
+           Args:
+                z_local: z position(s) in local coordinate system. ``z_local``-``z0`` is the distance from beam waist diameter ``w0`` in [um].
+
+           Returns:
+                u.Quantity: Beam diameter w(``z_local``) at the local position ``z_local`` in [um], can be either float for circular beam or 
+                            array for elliptical beam.
+        """
+        self.z_local = z_local
+        self._check_input('w')
+
+        # Calculate beam diameter, for circular beams it is a scalar, for elliptical beams it is a sequence of two scalars. This
+        # happens automatically as w0 and z_R are either scalars or sequences of two scalars.
+        w = self.w0[(slice(None),)+self.z_local.ndim*(np.newaxis,)] * np.sqrt(1 + (self.z_local[np.newaxis, :] - self.z0)**2 / self.z_R**2) 
+
+        return w
     
-        return E
+
+    def R(
+            self,
+            z_local: Union[float, Sequence[float], np.ndarray, u.Quantity],
+    ) -> u.Quantity:
+        """Calculate the radius of wavefront curvature at the position(s) ``z_local`` in the local coordinate system of the GaussianBeam 
+           instance, i.e. at distance ``z_local``-``z0`` from the beam waist diameter ``w0`` along the beam propagation direction in 
+           the global standard Carteesian coordinate system. For circular beams, R(``z_local``) is a scalar, for elliptical beams
+           it comprises two scalars for the local x- and y-direction respectively.
+
+           Args:
+                z_local: z position(s) in local coordinate system. ``z_local``-``z0`` is the distance from beam waist diameter ``w0`` in [um].
+
+           Returns:
+                u.Quantity: R(``z_local``) at the local position ``z_local`` in [um], can be either float for circular beam or array for 
+                            elliptical beam.
+        """
+        self.z_local = z_local
+        self._check_input('R')
+
+        # Calculate radius of curvature, for circular beams it is a scalar, for elliptical beams it is a sequence of two scalars. This
+        # happens automatically as z_R is either scalar or sequence of two scalars.
+        R = self.z_local + (self.z_local - self.z0)**2 / self.z_R
+
+        return R
     
+
+    def Psi(
+            self,
+            z_local: Union[float, Sequence[float], np.ndarray, u.Quantity],
+    ) -> u.Quantity:
+        """Calculate the Gouy phase at the position(s) ``z_local`` in the local coordinate system of the GaussianBeam instance, i.e.
+           at distance ``z_local``-``z0`` from the beam waist diameter ``w0`` along the beam propagation direction in the global
+           standard Carteesian coordinate system. For circular beams, the Gouy phase is a scalar, for elliptical beams
+           it comprises two scalars for the local x- and y-direction respectively.
+
+           Args:
+                z_local: z position(s) in local coordinate system. ``z_local``-``z0`` is the distance from beam waist diameter ``w0`` in [um].
+
+           Returns:
+                u.Quantity: Gouy phase Psi(``z_local``) at the local position ``z_local`` in [um], can be either float for circular beam or 
+                            array for elliptical beam.
+        """
+        self.z_local = z_local
+        self._check_input('Psi')
+
+        # Calculate Gouy phase, for circular beams it is a scalar, for elliptical beams it is a sequence of two scalars. This
+        # happens automatically as z_R is either scalar or sequence of two scalars.
+        Psi = np.arctan((self.z_local - self.z0) / self.z_R).to(u.rad).value # get rid of unit because [rad] is basically dimensionless 
+                                                                             # and astropy does not handle it well in the exponential
+
+        return Psi
+
+
+    def E(
+            self, 
+            x: Union[float, Sequence[float], np.ndarray, u.Quantity], 
+            y: Union[float, Sequence[float], np.ndarray, u.Quantity], 
+            z: Union[float, Sequence[float], np.ndarray, u.Quantity],
+    ) -> u.Quantity:
+        """Returns the complex electric field amplitude of the beam at the position (x,y,z) in [V/m]. 
+           Here, x, y, z are the global standard Carteesian coordinates in [um] and can be either float or array obtained from np.meshgrid().
+
+           Args:
+                x: Global standard Carteesian coordinate in [um].
+                y: Global standard Carteesian coordinate in [um].
+                z: Global standard Carteesian coordinate in [um].
+
+           Returns:
+                u.Quantity: Complex electric field amplitude of the beam at the position (x,y,z) in [V/m], can be either float or array.
+        """
+        self.x = x
+        self.y = y
+        self.z = z
+        self._check_input('E')
+
+        # Store the original shape for reshaping later
+        original_shape = self.x.shape  
+
+        # Flatten x, y, z if they are meshgrids (if x has shape (n,n,n), then x_flat has shape (n**3,))
+        x_flat = self.x.ravel()
+        y_flat = self.y.ravel()
+        z_flat = self.z.ravel()
+
+        # Stack and transform position(s) from global to local coordinate system
+        pos_flat = np.stack([x_flat, y_flat, z_flat], axis=-1).T   # Shape: (3, n**3)
+        pos_local_flat = (self._rotation_matrix.T @ pos_flat)      # Note that the transpose of the rotation matrix is its inverse
+        pos_local = pos_local_flat.reshape((3,) + original_shape)  # Reshape back to original shape
+
+        # Unpack the local positions
+        x_local, y_local, z_local = pos_local[0], pos_local[1], pos_local[2]
+
+        # Calculate beam propagation parameters at given local z positions
+        wz = self.w(z_local)
+        Rz = self.R(z_local)
+        Psiz = self.Psi(z_local)
+
+        # Mask to handle calculation differently at the beam waist location z=z0 in order to avoid division by zero in the exponential
+        # due to zero wavefront curvature at the beam waist
+        mask = ~np.isclose(z_local.value, self.z0.value)  
+        E = np.zeros_like(x_local.value, dtype=complex) * self.E0.unit  # Initialize complex electric field amplitude, must have same shape as x_local, y_local 
+                                                                        # and z_local, which all have the same shape (as ensured in _check_input())
+
+        # Calculate electric field strength
+        if np.isscalar(self.w0.value): # Circular beam, see https://en.wikipedia.org/wiki/Gaussian_beam, but of course it is also the special case
+                                       # of the elliptical beam defined below
+            E[mask] = self.E0 * self.w0 / wz[mask] * np.exp(-(x_local[mask]**2 + y_local[mask]**2) / wz[mask]**2 \
+                                                            - 1j * self.k * (x_local[mask]**2 + y_local[mask]**2) / (2*Rz[mask]) \
+                                                            + 1j * Psiz[mask] \
+                                                            - 1j * self.k * z_local[mask])
+            E[~mask] = self.E0 * np.exp(-(x_local[~mask]**2 + y_local[~mask]**2) / wz[~mask]**2)
+
+        else: # Elliptical beam, see equations (62) in chap 16 with c00=E0*sqrt(wx0*wy0), (58) in chap. 16 with (5) in chap. 17 and (49) in chap. 16
+            E[mask] = self.E0 * np.sqrt(self.w0[0] / wz[0][mask]) * np.sqrt(self.w0[1] / wz[1][mask]) \
+                      * np.exp(x_local[mask]**2 / wz[0][mask]**2 + y_local[mask]**2 / wz[1][mask]**2 \
+                               - 1j * self.k * (x_local[mask]**2 / 2*Rz[0][mask] + y_local[mask]**2 / 2*Rz[1][mask]) \
+                               + 1j * (Psiz[0][mask]/2 + Psiz[1][mask]/2) \
+                               - 1j * self.k * z_local[mask]),
+            E[~mask] = self.E0 * np.exp(x_local[~mask]**2 / wz[0][~mask]**2 + y_local[~mask]**2 / wz[1][~mask]**2)
+
+        return np.squeeze(E) # if E is scalar, return E instead of np.array([E])
+
 
     def E_vec(
             self,
-            x: u.Quantity,
-            y: u.Quantity,
-            z: u.Quantity,
-    ) -> u.Quantity:
-        """Calculate the complex electric field vector of the Gaussian beam at the given position.
-        
-            Parameters:
-                x (astropy.units.Quantity): x-coordinate of the position.
-                y (astropy.units.Quantity): y-coordinate of the position.
-                z (astropy.units.Quantity): z-coordinate of the position.
+            x: Union[float, Sequence[float], np.ndarray, u.Quantity],
+            y: Union[float, Sequence[float], np.ndarray, u.Quantity],
+            z: Union[float, Sequence[float], np.ndarray, u.Quantity],
+    ) -> np.ndarray:
+        """Returns the complex electric field vector of the beam at the position (x,y,z) in [V/m] in the standard Carteesian coordinate system.
+           This is just the complex electric field amplitude multiplied by the 3d polarization vector. Here, x, y, z are the global
+           standard Carteesian coordinates in [um] and can be either float or array obtained from np.meshgrid().
+           
+           Args:
+                x: Global standard Carteesian coordinate in [um].
+                y: Global standard Carteesian coordinate in [um].
+                z: Global standard Carteesian coordinate in [um].
                 
-            Returns:
-                astropy.units.Quantity: Complex electric field vector of the Gaussian beam at the given position.
+           Returns:
+                np.ndarray: Complex electric field vector of the beam at the position (x,y,z) in [V/m] in the standard Carteesian coordinate system.
         """
-
-        return self.E_field_amplitude(x, y, z) * self._pol_vec
-    
-
-
-    def intensity(
-            self,
-            x: u.Quantity,
-            y: u.Quantity,
-            z: u.Quantity,
-    ) -> u.Quantity:
-        """Calculate the intensity of the Gaussian beam at the given position.
-        
-            Parameters:
-                x (astropy.units.Quantity): x-coordinate of the position.
-                y (astropy.units.Quantity): y-coordinate of the position.
-                z (astropy.units.Quantity): z-coordinate of the position.
-                
-            Returns:
-                astropy.units.Quantity: Intensity of the Gaussian beam at the given position.
-        """
-
-        # Check input
-        for c in [x, y, z]:
-            if not isinstance(c, u.Quantity):
-                raise TypeError("x, y and z must be an instance of astropy.units.Quantity.")
-            else:
-                if not c.unit.is_equivalent(u.m):
-                    raise ValueError("x, y and z must be of unit equivalent to meter.")
-                else:
-                    x = x.to(u.mm)
-                    y = y.to(u.mm)
-                    z = z.to(u.mm)
-
-        # Transform position from global to local coordinate system
-        pos = np.array([x.value, y.value, z.value]) 
-        pos = np.transpose(self._rotation_matrix) @ pos
-        x = pos[0] * u.mm
-        y = pos[1] * u.mm
-        z = pos[2] * u.mm
-
-        if not isinstance(self.w0, Sequence):
-            # Calculate intensity (see https://en.wikipedia.org/wiki/Gaussian_beam)
-            r = np.sqrt(x**2 + y**2)
-            wz = self._w0 * np.sqrt(1 + (z - self._w0_zpos)**2 / self._z_R**2)
-            I = self._I0 * (self._w0/wz)**2 * np.exp(-2*r**2 / wz**2)
-        else:
-            # TODO: Implement elliptical beam shape
-            pass
-
-        return I
-    
+        return self.E(x, y, z) * self.pol_3d_vec
 
 
 
-    def _check_input(self,):
-        """Check that the input values are valid."""
-
-        # Check beam_direction
-        if not isinstance(self._beam_direction, Sequence):
-            raise TypeError("beam_direction must be an Sequence.")
-        if len(self._beam_direction) != 3:
-            raise ValueError("beam_direction must be a 3D vector in the global coordinate system.")
-        
-        # Check pol
-        if isinstance(self._pol, str):
-            if self._pol not in ['linear horizontal', 'linear vertical', 'circular left', 'circular right']:
-                raise ValueError("If pol is a str, it must be one of the following: 'linear horizontal', \
-                                 'linear vertical', 'circular left', 'circular right'.")
-        elif isinstance(self._pol, Sequence):
-            if len(self._pol) != 2:
-                raise ValueError("If pol is a Sequence, it must be a 2D Jones vector (ux, uy) in the frame where \
-                                  beam_direction points along z-dir, e.g.: (1, 0) == 'linear horizontal', \
-                                  (0, 1) == 'linear vertical', 1/sqrt(2)*(1, i) == 'circular left', \
-                                  1/sqrt(2)*(1, -i) == 'circular right'.")
-        else:
-            raise TypeError("pol must be a str or an Sequence.")
-        
-        # Check beam properties
-        for attr_name in ['_lambda_', '_nu', '_w', '_k', '_w0', '_z_R', '_theta', '_P', '_I0', '_E0']:
-            attr_value = getattr(self, attr_name)
-            if attr_value is not None and not isinstance(attr_value, u.Quantity):
-                raise TypeError(f"The attribute '{attr_name}' must be an instance of astropy.units.Quantity.")      
-        em_properties = sum([getattr(self, attr_name) != None for attr_name in ['_lambda_', '_nu', '_w', '_k']])
-        if em_properties != 1:
-            raise ValueError("Exactly one of the following must be provided: lambda_, nu, w or k.")
-        geometry_properties = sum([getattr(self, attr_name) != None for attr_name in ['_w0', '_z_R', '_theta']])
-        if geometry_properties != 1:
-            raise ValueError("Exactly one of the following must be provided: w0, z_R or theta.")
-        power_properties = sum([getattr(self, attr_name) != None for attr_name in ['_P', '_I0', '_E0']])
-        if power_properties != 1:
-            raise ValueError("Exactly one of the following must be provided: P, I0 or E0.")
-        if self._lambda_ != None and not self._lambda_.unit.is_equivalent(u.m):
-            raise ValueError("Wavelength must be of unit equivalent to meter.")
-        if self._nu != None and not self._nu.unit.is_equivalent(1/u.s):
-            raise ValueError("Frequency must be of unit equivalent to 1/s.")
-        if self._w != None and not self._w.unit.is_equivalent(1/u.s):
-            raise ValueError("Angular frequency must be of unit equivalent to 1/s.")
-        if self._k != None and not self._k.unit.is_equivalent(1/u.m):
-            raise ValueError("Wavenumber must be of unit equivalent to 1/m.")
-        if self._w0 != None and not self._w0.unit.is_equivalent(u.m):
-            raise ValueError("Beam waist diameter must be of unit equivalent to meter.")
-        if self._z_R != None and not self._z_R.unit.is_equivalent(u.m):
-            raise ValueError("Rayleigh length must be of unit equivalent to meter.")
-        if self._theta != None and not self._theta.unit.is_equivalent(u.rad):
-            raise ValueError("Beam divergence angle must be of unit equivalent to radian.")
-        if self._P != None and not self._P.unit.is_equivalent(u.W):
-            raise ValueError("Power must be of unit equivalent to Watt.")
-        if self._I0 != None and not self._I0.unit.is_equivalent(u.W/u.m**2):
-            raise ValueError("Intensity must be of unit equivalent to Watt per square meter.")
-        if self._E0 != None and not self._E0.unit.is_equivalent(u.V/u.m):
-            raise ValueError("Electric field strength must be of unit equivalent to Volt per meter.")
-        
-        # Check w0_zpos
-        if not isinstance(self._w0_zpos, u.Quantity):
-            raise TypeError("w0_zpos must be an instance of astropy.units.Quantity.")
-        
-    
-    def _initialize_beam(self,):
-        """Initialize the beam."""
-
-        # Beam direction and polarization
-        self._beam_direction = np.array(self._beam_direction) / np.linalg.norm(self._beam_direction)
-        if isinstance(self._pol, str):
-            if self._pol == 'linear horizontal':
-                self._pol = np.array([1, 0])
-            elif self._pol == 'linear vertical':
-                self._pol = np.array([0, 1])
-            elif self._pol == 'circular left':
-                self._pol = 1/np.sqrt(2)*np.array([1, 1j])
-            elif self._pol == 'circular right':
-                self._pol = 1/np.sqrt(2)*np.array([1, -1j])
-        elif isinstance(self._pol, Sequence):
-            self._pol = np.array(self._pol) / np.linalg.norm(self._pol)
-
-        # Electromagnetic properties
-        if self._lambda_ != None:
-            self._lambda_ = self._lambda_.to(u.nm)
-            self._nu = (c / self._lambda_).to(u.THz)
-            self._w = (2*np.pi * self._nu).to(u.THz)
-            self._k = (2*np.pi / self._lambda_).to(1/u.m)
-        elif self._nu != None:
-            self._lambda_ = (c / self._nu).to(u.nm)
-            self._nu = self._nu.to(u.THz)
-            self._w = (2*np.pi * self._nu).to(u.THz)
-            self._k = (2*np.pi / self._lambda_).to(1/u.m)
-        elif self._w != None:
-            self._nu = (self._w / (2*np.pi)).to(u.THz)
-            self._lambda_ = (c / self._nu).to(u.nm)
-            self._w = self._w.to(u.THz)
-            self._k = (2*np.pi / self._lambda_).to(1/u.m)
-        elif self._k != None:
-            self._lambda_ = (2*np.pi / self._k).to(u.nm)
-            self._nu = (c / self._lambda_).to(u.THz)
-            self._w = (2*np.pi * self._nu).to(u.THz)
-            self._k = self._k.to(1/u.m)
-
-        # Beam geometry
-        if self._w0 != None:
-            self._w0 = self._w0.to(u.mm)
-            self._z_R = (np.pi * self._w0**2 / self._lambda_).to(u.m)
-            self._theta = (self._lambda_.to(u.m) / (np.pi * self._w0.to(u.m)))*u.rad
-        elif self._z_R != None:
-            self._z_R = self._z_R.to(u.m)
-            self._w0 = np.sqrt((self._z_R * self._lambda_ / np.pi)).to(u.mm)
-            self._theta = (self._lambda_.to(u.m) / (np.pi * self._w0.to(u.m)))*u.rad
-        elif self._theta != None:
-            self._theta = self._theta.to(u.rad)
-            self._w0 = (self._lambda_.to(u.m) / (np.pi * self._theta.to(u.rad).value)).to(u.mm)
-            self._z_R = (np.pi * self._w0**2 / self._lambda_).to(u.m)
-        
-        # Beam power attributes
-        if self._P != None:
-            self._P = self._P.to(u.W)
-            self._I0 = (2*self._P / (np.pi * self._w0**2)).to(u.mW/u.cm**2)
-            self._E0 = (np.sqrt(2*self._I0 / (eps0*c))).to(u.V/u.m)
-        elif self._I0 != None:
-            self._I0 = self._I0.to(u.mW/u.cm**2)
-            self._P = (self._I0 * np.pi * self._w0**2 / 2).to(u.W)
-            self._E0 = (np.sqrt(2*self._I0 / (eps0*c))).to(u.V/u.m)
-        elif self._E0 != None:
-            self._E0 = self._E0.to(u.V/u.m)
-            self._I0 = (eps0*c*self._E0**2 / 2).to(u.mW/u.cm**2)
-            self._P = (self._I0 * np.pi * self._w0**2 / 2).to(u.W)
-
-        
-
-
-    def _calculate_rotation_matrix(self,):
+    def _calculate_rotation_matrix(
+            self, 
+    ) -> np.ndarray:
         """Calculate the rotation matrix to transform from the local coordinate system to the global 
            coordinate system. 
            
            In the local coordinate system of this GaussianBeam instance, the 3d polarization vector 
-           and the beam_direction vector are given by:
-           pol_vec = (pol[0], pol[1], 0)
-           beam_direction = (0, 0, 1) 
+           and the beam direction vector are given by:
+           3d polarization = (pol_Jones_vec[0], pol_Jones_vec[1], 0)
+           beam direction = (0, 0, 1) 
 
-           In the global coordinate system, the 3d polarization vector and the beam_direction vector 
+           In the global coordinate system, the 3d polarization vector and the beam direction vector 
            are given by:
-           pol_vec = R * (pol[0], pol[1], 0)   # R is the rotation matrix
-           beam_direction = (beam_direction[0], beam_direction[1], beam_direction[2])
+           3d polarization = R * (pol_Jones_vec[0], pol_Jones_vec[1], 0)   # R is the rotation matrix
+           beam direction = (beam_direction[0], beam_direction[1], beam_direction[2])
 
-           Note, that in principle the rotation matrix is ambiguous because the Jones vector in the 
-           orthogonal subspace to beam_direction has an arbitrary 2d basis in general. We choose the 
-           following convention for the 3d polarization vector at the 3 beam directions (1,0,0), (0,1,0) 
-           and (0,0,1) respectively:
-           Beam along x-axis: Linear horizontal polarization -> pol_vec = (0,1,0)
-                              Linear vertical polarization -> pol_vec = (0,0,1)
-           Beam along y-axis: Linear horizontal polarization -> pol_vec = (1,0,0)
-                              Linear vertical polarization -> pol_vec = (0,0,-1)
-           Beam along z-axis: Linear horizontal polarization -> pol_vec = (1,0,0)
-                              Linear vertical polarization -> pol_vec = (0,1,0)
-           
-           Note, that regardless of the coordinate system, the polarization vector is always
-           perpendicular to the beam_direction vector!           
+           Args:
+                None
+
+           Returns:
+                np.ndarray: 3x3 rotation matrix to transform from the local coordinate system to the global standard 
+                             Carteesian coordinate system.       
         """
+        assert np.isclose(np.linalg.norm(self.beam_direction_vec), 1), "beam_direction must be a unit vector"
 
-        beam_direction = np.array(self.beam_direction) / np.linalg.norm(self.beam_direction) # Normalize beam direction
-        z_axis = np.array([0, 0, 1])
-
-        # Choosing local x-axis based on the beam direction
-        if beam_direction[0] != 0:
+        # Choosing local x-axis based on the beam direction (this follows the convention described in the class docstring)
+        if self.beam_direction_vec[0] != 0:
             local_x_axis = np.array([0, 1, 0])
         else:
             local_x_axis = np.array([1, 0, 0])
 
         # Computing local y-axis
-        local_y_axis = np.cross(beam_direction, local_x_axis)
-        local_y_axis /= np.linalg.norm(local_y_axis)  # Normalize
+        local_y_axis = np.cross(self.beam_direction_vec, local_x_axis)
+        local_y_axis = local_y_axis / np.linalg.norm(local_y_axis)  # Normalize
 
         # Adjust local x-axis to ensure orthogonality
-        local_x_axis = np.cross(local_y_axis, beam_direction)
+        local_x_axis = np.cross(local_y_axis, self.beam_direction_vec)
 
         # Constructing rotation matrix
-        R = np.column_stack((local_x_axis, local_y_axis, beam_direction))
+        R = np.column_stack((local_x_axis, local_y_axis, self.beam_direction_vec))
 
         return R
+
+
+
+
+    def _check_input(
+            self, 
+            method: str,
+    ) -> None:
+        """Checks the input of the method ``method``."""
+        if method == 'init':
+            # Check beam direction vector
+            if not isinstance(self.beam_direction_vec, (Sequence, np.ndarray)): 
+                raise TypeError('The beam_direction_vec must be a sequence.')
+            if not len(self.beam_direction_vec) == 3:
+                raise ValueError('The beam_direction_vec must be a 3d vector.')
+            self.beam_direction_vec = np.asarray(self.beam_direction_vec)
+            self.beam_direction_vec = self.beam_direction_vec / np.linalg.norm(self.beam_direction_vec)  # Normalize
+
+            # Check polarization Jones vector
+            if not isinstance(self.pol_Jones_vec, (Sequence, np.ndarray)):
+                raise TypeError('The pol_Jones_vec must be a sequence.')
+            if not len(self.pol_Jones_vec) == 2:
+                raise ValueError('The pol_Jones_vec must be a 2d vector.')
+            self.pol_Jones_vec = np.asarray(self.pol_Jones_vec)
+            self.pol_Jones_vec = self.pol_Jones_vec / np.linalg.norm(self.pol_Jones_vec)  # Normalize
+
+            # Check wavelength
+            if isinstance(self.lambda_, (float, int)):
+                self.lambda_ = self.lambda_ * u.nm
+            if not isinstance(self.lambda_, u.Quantity) and self.lambda_.unit.is_equivalent(u.nm):
+                raise TypeError('The wavelength lambda_ must be an astropy.Quantity or float.')
+            
+            # Check beam waist diameter
+            if isinstance(self.w0, (float, int)):
+                self.w0 = self.w0 * u.um
+            if isinstance(self.w0, (Sequence, np.ndarray)) and len(self.w0) == 2:
+                self.w0 = np.asarray(self.w0) * u.um
+            if not isinstance(self.w0, u.Quantity) or not self.w0.unit.is_equivalent(u.um):
+                raise TypeError('The beam waist diameter w0 must be an astropy.Quantity or float.')
+            
+            # Check power
+            if isinstance(self.P, (float, int)):
+                self.P = self.P * u.W
+            if not isinstance(self.P, u.Quantity) or not self.P.unit.is_equivalent(u.W):
+                raise TypeError('The power P must be an astropy.Quantity or float.')
+            
+            # Check position of the beam waist
+            if isinstance(self.z0, (float, int)):
+                self.z0 = self.z0 * u.um
+            if not isinstance(self.z0, u.Quantity) or not self.z0.unit.is_equivalent(u.um):
+                raise TypeError('The position of the beam waist z0 must be an astropy.Quantity or float.')
+            
+
+        elif method == 'w' or method == 'R' or method == 'Psi':
+            # Check z
+            if not isinstance(self.z_local, u.Quantity) and isinstance(self.z_local, (Sequence, np.ndarray, float, int)):
+                self.z_local = np.atleast_1d(self.z_local) * u.um
+            elif self.z_local.unit.is_equivalent(u.um):
+                self.z_local = np.atleast_1d(self.z_local.value) * u.um
+            else:
+                raise TypeError('The local z-coordinate must be an astropy.Quantity or float or sequence of floats.')
+            
+
+        elif method == 'E' or method == 'E_vec' or method == 'I':
+            # Check x
+            if not isinstance(self.x, u.Quantity) and isinstance(self.x, (Sequence, np.ndarray, float, int)):
+                self.x = np.atleast_1d(self.x) * u.um
+            elif self.x.unit.is_equivalent(u.um):
+                self.x = np.atleast_1d(self.x.value) * u.um
+            else:
+                raise TypeError('The x-coordinate must be an astropy.Quantity or float or sequence of floats.')
+            
+            # Check y
+            if not isinstance(self.y, u.Quantity) and isinstance(self.y, (Sequence, np.ndarray, float, int)):
+                self.y = np.atleast_1d(self.y) * u.um
+            elif self.y.unit.is_equivalent(u.um):
+                self.y = np.atleast_1d(self.y.value) * u.um
+            else:
+                raise TypeError('The y-coordinate must be an astropy.Quantity or float or sequence of floats.')
+            
+            # Check z
+            if not isinstance(self.z, u.Quantity) and isinstance(self.z, (Sequence, np.ndarray, float, int)):
+                self.z = np.atleast_1d(self.z) * u.um
+            elif self.z.unit.is_equivalent(u.um):
+                self.z = np.atleast_1d(self.z.value) * u.um
+            else:
+                raise TypeError('The z-coordinate must be an astropy.Quantity or float or sequence of floats.')
+            
+            if not self.x.shape == self.y.shape == self.z.shape:
+                raise ValueError('The x, y, and z coordinates must have the same shape. Either all scalars or all arrays from np.meshgrid().')
+
+
+        
