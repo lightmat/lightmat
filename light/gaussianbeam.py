@@ -127,7 +127,10 @@ class GaussianBeam(object):
         self.nu = (self.omega / (2*np.pi)).to(u.THz)
         self.z_R = (np.pi * self.w0**2 / self.lambda_).to(u.um)
         self.theta = (self.lambda_ / (np.pi * self.w0)).value
-        self.I0 = (2 * self.P / (np.pi * self.w0**2)).to(u.mW/u.cm**2)
+        if np.isscalar(self.w0.value): # Circular beam
+            self.I0 = (2 * self.P / (np.pi * self.w0**2)).to(u.mW/u.cm**2)
+        else: # Elliptical beam
+            self.I0 = (self.P / (np.pi * self.w0[0] * self.w0[1])).to(u.mW/u.cm**2)
         self.E0 = (np.sqrt(2 * self.I0 / (eps0 * c))).to(u.V/u.m)
 
         self._rotation_matrix = self._calculate_rotation_matrix() 
@@ -159,11 +162,13 @@ class GaussianBeam(object):
         self.z_local = z_local
         self._check_input('w')
 
+        indexing_tuple = (slice(None),) + (np.newaxis,) * self.z_local.ndim  # This is used to broadcasting, if ndim=3, it becomes (:, 3*np.newaxis)
+
         # Calculate beam diameter, for circular beams it is a scalar, for elliptical beams it is a sequence of two scalars. This
         # happens automatically as w0 and z_R are either scalars or sequences of two scalars.
-        w = self.w0[(slice(None),)+self.z_local.ndim*(np.newaxis,)] * np.sqrt(1 + (self.z_local[np.newaxis, :] - self.z0)**2 / self.z_R**2) 
+        w = self.w0[indexing_tuple] * np.sqrt(1 + (self.z_local[np.newaxis, :] - self.z0)**2 / self.z_R[indexing_tuple]**2) 
 
-        return w
+        return w 
     
 
     def R(
@@ -185,9 +190,11 @@ class GaussianBeam(object):
         self.z_local = z_local
         self._check_input('R')
 
+        indexing_tuple = (slice(None),) + (np.newaxis,) * self.z_local.ndim  # This is used to broadcasting, if ndim=3, it becomes (:, 3*np.newaxis)
+
         # Calculate radius of curvature, for circular beams it is a scalar, for elliptical beams it is a sequence of two scalars. This
         # happens automatically as z_R is either scalar or sequence of two scalars.
-        R = self.z_local + (self.z_local - self.z0)**2 / self.z_R
+        R = self.z_local[np.newaxis, :] + (self.z_local[np.newaxis, :] - self.z0)**2 / self.z_R[indexing_tuple]
 
         return R
     
@@ -211,11 +218,12 @@ class GaussianBeam(object):
         self.z_local = z_local
         self._check_input('Psi')
 
+        indexing_tuple = (slice(None),) + (np.newaxis,) * self.z_local.ndim  # This is used to broadcasting, if ndim=3, it becomes (:, 3*np.newaxis)
+
         # Calculate Gouy phase, for circular beams it is a scalar, for elliptical beams it is a sequence of two scalars. This
         # happens automatically as z_R is either scalar or sequence of two scalars.
-        Psi = np.arctan((self.z_local - self.z0) / self.z_R).to(u.rad).value # get rid of unit because [rad] is basically dimensionless 
-                                                                             # and astropy does not handle it well in the exponential
-
+        Psi = np.arctan((self.z_local[np.newaxis, :] - self.z0) / self.z_R[indexing_tuple]).to(u.rad).value # get rid of unit because [rad] is dimensionless 
+                                                                                                            # and astropy doesn't handle it well in exponential
         return Psi
 
 
@@ -280,10 +288,11 @@ class GaussianBeam(object):
         else: # Elliptical beam, see equations (62) in chap 16 with c00=E0*sqrt(wx0*wy0), (58) in chap. 16 with (5) in chap. 17 and (49) in chap. 16
             E[mask] = self.E0 * np.sqrt(self.w0[0] / wz[0][mask]) * np.sqrt(self.w0[1] / wz[1][mask]) \
                       * np.exp(x_local[mask]**2 / wz[0][mask]**2 + y_local[mask]**2 / wz[1][mask]**2 \
-                               - 1j * self.k * (x_local[mask]**2 / 2*Rz[0][mask] + y_local[mask]**2 / 2*Rz[1][mask]) \
+                               - 1j * self.k * (x_local[mask]**2 / (2*Rz[0][mask]) + y_local[mask]**2 / (2*Rz[1][mask])) \
                                + 1j * (Psiz[0][mask]/2 + Psiz[1][mask]/2) \
                                - 1j * self.k * z_local[mask]),
             E[~mask] = self.E0 * np.exp(x_local[~mask]**2 / wz[0][~mask]**2 + y_local[~mask]**2 / wz[1][~mask]**2)
+
 
         return np.squeeze(E) # if E is scalar, return E instead of np.array([E])
 
