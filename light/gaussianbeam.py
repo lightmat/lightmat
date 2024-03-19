@@ -115,7 +115,7 @@ class GaussianBeam(object):
         self.beam_direction_vec = np.array(beam_direction_vec)
         self.pol_Jones_vec = np.array(pol_Jones_vec)
         self.lambda_ = lambda_
-        self.w0 = w0
+        self.w0 = w0 # either a scalar for circular beams or a vector of two floats for elliptical beams
         self.P = P
         self.z0 = z0
         self._check_input('init')
@@ -125,8 +125,8 @@ class GaussianBeam(object):
         self.k_vec = self.k * self.beam_direction_vec
         self.omega = (2*np.pi * c / self.lambda_).to(u.THz)
         self.nu = (self.omega / (2*np.pi)).to(u.THz)
-        self.z_R = (np.pi * self.w0**2 / self.lambda_).to(u.um)
-        self.theta = (self.lambda_ / (np.pi * self.w0)).value
+        self.z_R = (np.pi * self.w0**2 / self.lambda_).to(u.um) # either a scalar for circular beams or a vector of two floats for elliptical beams
+        self.theta = (self.lambda_ / (np.pi * self.w0)).value # either a scalar for circular beams or a vector of two floats for elliptical beams
         if np.isscalar(self.w0.value): # Circular beam
             self.I0 = (2 * self.P / (np.pi * self.w0**2)).to(u.mW/u.cm**2)
         else: # Elliptical beam
@@ -162,11 +162,14 @@ class GaussianBeam(object):
         self.z_local = z_local
         self._check_input('w')
 
-        indexing_tuple = (slice(None),) + (np.newaxis,) * self.z_local.ndim  # This is used to broadcasting, if ndim=3, it becomes (:, 3*np.newaxis)
-
-        # Calculate beam diameter, for circular beams it is a scalar, for elliptical beams it is a sequence of two scalars. This
-        # happens automatically as w0 and z_R are either scalars or sequences of two scalars.
-        w = self.w0[indexing_tuple] * np.sqrt(1 + (self.z_local[np.newaxis, :] - self.z0)**2 / self.z_R[indexing_tuple]**2) 
+        # Calculate beam diameter at given local z positions
+        if np.isscalar(self.w0.value): # Circular beam
+            w = self.w0 * np.sqrt(1 + (self.z_local - self.z0)**2 / self.z_R**2)
+        else: # Elliptical beam
+            w = np.array([
+                (self.w0[0] * np.sqrt(1 + (self.z_local - self.z0)**2 / self.z_R[0]**2)).to(self.w0.unit),
+                (self.w0[1] * np.sqrt(1 + (self.z_local - self.z0)**2 / self.z_R[1]**2)).to(self.w0.unit),
+            ]) * self.w0.unit
 
         return w 
     
@@ -190,11 +193,14 @@ class GaussianBeam(object):
         self.z_local = z_local
         self._check_input('R')
 
-        indexing_tuple = (slice(None),) + (np.newaxis,) * self.z_local.ndim  # This is used to broadcasting, if ndim=3, it becomes (:, 3*np.newaxis)
-
-        # Calculate radius of curvature, for circular beams it is a scalar, for elliptical beams it is a sequence of two scalars. This
-        # happens automatically as z_R is either scalar or sequence of two scalars.
-        R = self.z_local[np.newaxis, :] + (self.z_local[np.newaxis, :] - self.z0)**2 / self.z_R[indexing_tuple]
+        # Calculate radius of wavefront curvature at given local z positions
+        if np.isscalar(self.w0.value): # Circular beam
+            R = self.z_local + self.z_R**2 / (self.z_local - self.z0)
+        else: # Elliptical beam
+            R = np.array([
+                (self.z_local + self.z_R[0]**2 / (self.z_local - self.z0)).to(self.z_local.unit),
+                (self.z_local + self.z_R[1]**2 / (self.z_local - self.z0)).to(self.z_local.unit),
+            ]) * self.z_local.unit
 
         return R
     
@@ -218,12 +224,16 @@ class GaussianBeam(object):
         self.z_local = z_local
         self._check_input('Psi')
 
-        indexing_tuple = (slice(None),) + (np.newaxis,) * self.z_local.ndim  # This is used to broadcasting, if ndim=3, it becomes (:, 3*np.newaxis)
+        # Calculate Gouy phase at given local z positions
+        if np.isscalar(self.w0.value): # Circular beam
+            Psi = np.arctan((self.z_local - self.z0) / self.z_R).to(u.rad).value # get rid of unit because [rad] is dimensionless 
+                                                                                 # and astropy doesn't handle it well in exponential
+        else: # Elliptical beam
+            Psi = np.array([
+                np.arctan((self.z_local - self.z0) / self.z_R[0]).to(u.rad).value, 
+                np.arctan((self.z_local - self.z0) / self.z_R[1]).to(u.rad).value, 
+            ])
 
-        # Calculate Gouy phase, for circular beams it is a scalar, for elliptical beams it is a sequence of two scalars. This
-        # happens automatically as z_R is either scalar or sequence of two scalars.
-        Psi = np.arctan((self.z_local[np.newaxis, :] - self.z0) / self.z_R[indexing_tuple]).to(u.rad).value # get rid of unit because [rad] is dimensionless 
-                                                                                                            # and astropy doesn't handle it well in exponential
         return Psi
 
 
@@ -270,28 +280,47 @@ class GaussianBeam(object):
         Rz = self.R(z_local)
         Psiz = self.Psi(z_local)
 
-        # Mask to handle calculation differently at the beam waist location z=z0 in order to avoid division by zero in the exponential
-        # due to zero wavefront curvature at the beam waist
-        mask = ~np.isclose(z_local.value, self.z0.value)  
-        E = np.zeros_like(x_local.value, dtype=complex) * self.E0.unit  # Initialize complex electric field amplitude, must have same shape as x_local, y_local 
-                                                                        # and z_local, which all have the same shape (as ensured in _check_input())
-
         # Calculate electric field strength
         if np.isscalar(self.w0.value): # Circular beam, see https://en.wikipedia.org/wiki/Gaussian_beam, but of course it is also the special case
                                        # of the elliptical beam defined below
-            E[mask] = self.E0 * self.w0 / wz[mask] * np.exp(-(x_local[mask]**2 + y_local[mask]**2) / wz[mask]**2 \
-                                                            - 1j * self.k * (x_local[mask]**2 + y_local[mask]**2) / (2*Rz[mask]) \
-                                                            + 1j * Psiz[mask] \
-                                                            - 1j * self.k * z_local[mask])
-            E[~mask] = self.E0 * np.exp(-(x_local[~mask]**2 + y_local[~mask]**2) / wz[~mask]**2)
+            E = self.E0 * self.w0 / wz * np.exp(-(x_local**2 + y_local**2) / wz**2 \
+                                                - 1j * self.k * (x_local**2 + y_local**2) / (2*Rz) \
+                                                + 1j * Psiz \
+                                                - 1j * self.k * z_local)
 
         else: # Elliptical beam, see equations (62) in chap 16 with c00=E0*sqrt(wx0*wy0), (58) in chap. 16 with (5) in chap. 17 and (49) in chap. 16
-            E[mask] = self.E0 * np.sqrt(self.w0[0] / wz[0][mask]) * np.sqrt(self.w0[1] / wz[1][mask]) \
-                      * np.exp(x_local[mask]**2 / wz[0][mask]**2 + y_local[mask]**2 / wz[1][mask]**2 \
-                               - 1j * self.k * (x_local[mask]**2 / (2*Rz[0][mask]) + y_local[mask]**2 / (2*Rz[1][mask])) \
-                               + 1j * (Psiz[0][mask]/2 + Psiz[1][mask]/2) \
-                               - 1j * self.k * z_local[mask]),
-            E[~mask] = self.E0 * np.exp(x_local[~mask]**2 / wz[0][~mask]**2 + y_local[~mask]**2 / wz[1][~mask]**2)
+            E = self.E0 * np.sqrt(self.w0[0] / wz[0]) * np.sqrt(self.w0[1] / wz[1]) \
+                        * np.exp(-(x_local**2 / wz[0]**2 + y_local**2 / wz[1]**2) \
+                                 - 1j * self.k * (x_local**2 / (2*Rz[0]) + y_local**2 / (2*Rz[1])) \
+                                 + 1j * (Psiz[0]/2 + Psiz[1]/2) \
+                                 - 1j * self.k * z_local)
+
+
+        # Mask to handle calculation differently at the beam waist location z=z0 in order to avoid division by zero in the exponential
+        # due to zero wavefront curvature at the beam waist
+        # mask = ~np.isclose(z_local.value, self.z0.value)  
+        # E = np.zeros_like(x_local.value, dtype=complex) * self.E0.unit  # Initialize complex electric field amplitude, must have same shape as x_local, y_local 
+                                                                        # and z_local, which all have the same shape (as ensured in _check_input())
+
+        #if np.isscalar(self.w0.value): # Circular beam, see https://en.wikipedia.org/wiki/Gaussian_beam, but of course it is also the special case
+        #                               # of the elliptical beam defined below
+        #    # First at positions z != z0
+        #    E[mask] = self.E0 * self.w0 / wz[mask] * np.exp(-(x_local[mask]**2 + y_local[mask]**2) / wz[mask]**2 \
+        #                                                    - 1j * self.k * (x_local[mask]**2 + y_local[mask]**2) / (2*Rz[mask]) \
+        #                                                    + 1j * Psiz[mask] \
+        #                                                    - 1j * self.k * z_local[mask])
+        #    # Treat position z=z0 separately
+        #    E[~mask] = self.E0 * np.exp(-(x_local[~mask]**2 + y_local[~mask]**2) / wz[~mask]**2)
+#
+        #else: # Elliptical beam, see equations (62) in chap 16 with c00=E0*sqrt(wx0*wy0), (58) in chap. 16 with (5) in chap. 17 and (49) in chap. 16
+        #    # First at positions z != z0
+        #    E[mask] = self.E0 * np.sqrt(self.w0[0] / wz[0][mask]) * np.sqrt(self.w0[1] / wz[1][mask]) \
+        #              * np.exp(x_local[mask]**2 / wz[0][mask]**2 + y_local[mask]**2 / wz[1][mask]**2 \
+        #                       - 1j * self.k * (x_local[mask]**2 / (2*Rz[0][mask]) + y_local[mask]**2 / (2*Rz[1][mask])) \
+        #                       + 1j * (Psiz[0][mask]/2 + Psiz[1][mask]/2) \
+        #                       - 1j * self.k * z_local[mask]),
+        #    # Treat position z=z0 separately
+        #    E[~mask] = self.E0 * np.exp(x_local[~mask]**2 / wz[0][~mask]**2 + y_local[~mask]**2 / wz[1][~mask]**2)
 
 
         return np.squeeze(E) # if E is scalar, return E instead of np.array([E])
@@ -315,7 +344,14 @@ class GaussianBeam(object):
            Returns:
                 np.ndarray: Complex electric field vector of the beam at the position (x,y,z) in [V/m] in the standard Carteesian coordinate system.
         """
-        return self.E(x, y, z) * self.pol_3d_vec
+        E = self.E(x, y, z)
+        Evec = np.array([
+            E * self.pol_3d_vec[0],
+            E * self.pol_3d_vec[1],
+            E * self.pol_3d_vec[2],
+        ]) * E.unit
+        
+        return Evec
 
 
 
@@ -390,67 +426,97 @@ class GaussianBeam(object):
             # Check wavelength
             if isinstance(self.lambda_, (float, int)):
                 self.lambda_ = self.lambda_ * u.nm
-            if not isinstance(self.lambda_, u.Quantity) and self.lambda_.unit.is_equivalent(u.nm):
+            elif isinstance(self.lambda_, u.Quantity) and self.lambda_.unit.is_equivalent(u.nm):
+                if np.isscalar(self.lambda_.value):
+                    self.lambda_ = self.lambda_.to(u.nm)
+                else:
+                    raise TypeError('The wavelength lambda_ must be an astropy.Quantity or float.')
+            else:
                 raise TypeError('The wavelength lambda_ must be an astropy.Quantity or float.')
+
             
             # Check beam waist diameter
             if isinstance(self.w0, (float, int)):
                 self.w0 = self.w0 * u.um
-            if isinstance(self.w0, (Sequence, np.ndarray)) and len(self.w0) == 2:
+            elif isinstance(self.w0, (Sequence, np.ndarray)) and not isinstance(self.w0, u.Quantity) and len(self.w0) == 2:
                 self.w0 = np.asarray(self.w0) * u.um
-            if not isinstance(self.w0, u.Quantity) or not self.w0.unit.is_equivalent(u.um):
-                raise TypeError('The beam waist diameter w0 must be an astropy.Quantity or float.')
+            elif isinstance(self.w0, u.Quantity) and self.w0.unit.is_equivalent(u.um):
+                if np.isscalar(self.w0.value):
+                    self.w0 = self.w0.to(u.um)
+                elif len(self.w0.value) == 2:
+                    self.w0 = self.w0.to(u.um)
+                else:
+                    raise ValueError('The beam waist diameter w0 must be a scalar or sequence of two floats.')
+            else:
+                raise TypeError('The beam waist diameter w0 must be an astropy.Quantity or float or sequence of floats.')
+
             
             # Check power
             if isinstance(self.P, (float, int)):
                 self.P = self.P * u.W
-            if not isinstance(self.P, u.Quantity) or not self.P.unit.is_equivalent(u.W):
+            elif isinstance(self.P, u.Quantity) and self.P.unit.is_equivalent(u.W):
+                if np.isscalar(self.P.value):
+                    self.P = self.P.to(u.W)
+                else:
+                    raise TypeError('The power P must be an astropy.Quantity or float.')
+            else:
                 raise TypeError('The power P must be an astropy.Quantity or float.')
             
             # Check position of the beam waist
             if isinstance(self.z0, (float, int)):
                 self.z0 = self.z0 * u.um
-            if not isinstance(self.z0, u.Quantity) or not self.z0.unit.is_equivalent(u.um):
+            elif isinstance(self.z0, u.Quantity) and self.z0.unit.is_equivalent(u.um):
+                if np.isscalar(self.z0.value):
+                    self.z0 = self.z0.to(u.um)
+                else:
+                    raise TypeError('The position of the beam waist z0 must be an astropy.Quantity or float.')
+            else:
                 raise TypeError('The position of the beam waist z0 must be an astropy.Quantity or float.')
             
 
         elif method == 'w' or method == 'R' or method == 'Psi':
             # Check z
-            if not isinstance(self.z_local, u.Quantity) and isinstance(self.z_local, (Sequence, np.ndarray, float, int)):
-                self.z_local = np.atleast_1d(self.z_local) * u.um
-            elif self.z_local.unit.is_equivalent(u.um):
-                self.z_local = np.atleast_1d(self.z_local.value) * u.um
+            if isinstance(self.z_local, (float, int)):
+                self.z_local = np.array([self.z_local]) * u.um
+            elif isinstance(self.z_local, (Sequence, np.ndarray)) and not isinstance(self.z_local, u.Quantity):
+                self.z_local = np.asarray(self.z_local) * u.um
+            elif isinstance(self.z_local, u.Quantity) and self.z_local.unit.is_equivalent(u.um):
+                self.z_local = (np.atleast_1d(self.z_local.value) * self.z_local.unit).to(u.um)
             else:
-                raise TypeError('The local z-coordinate must be an astropy.Quantity or float or sequence of floats.')
+                raise TypeError('The z-coordinate must be an astropy.Quantity or float or sequence of floats.')
+            
             
 
         elif method == 'E' or method == 'E_vec' or method == 'I':
             # Check x
-            if not isinstance(self.x, u.Quantity) and isinstance(self.x, (Sequence, np.ndarray, float, int)):
-                self.x = np.atleast_1d(self.x) * u.um
-            elif self.x.unit.is_equivalent(u.um):
-                self.x = np.atleast_1d(self.x.value) * u.um
+            if isinstance(self.x, (float, int)):
+                self.x = np.array([self.x]) * u.um
+            elif isinstance(self.x, (Sequence, np.ndarray)) and not isinstance(self.x, u.Quantity):
+                self.x = np.asarray(self.x) * u.um
+            elif isinstance(self.x, u.Quantity) and self.x.unit.is_equivalent(u.um):
+                self.x = (np.atleast_1d(self.x.value) * self.x.unit).to(u.um)
             else:
                 raise TypeError('The x-coordinate must be an astropy.Quantity or float or sequence of floats.')
             
             # Check y
-            if not isinstance(self.y, u.Quantity) and isinstance(self.y, (Sequence, np.ndarray, float, int)):
-                self.y = np.atleast_1d(self.y) * u.um
-            elif self.y.unit.is_equivalent(u.um):
-                self.y = np.atleast_1d(self.y.value) * u.um
+            if isinstance(self.y, (float, int)):
+                self.y = np.array([self.y]) * u.um
+            elif isinstance(self.y, (Sequence, np.ndarray)) and not isinstance(self.y, u.Quantity):
+                self.y = np.asarray(self.y) * u.um
+            elif isinstance(self.y, u.Quantity) and self.y.unit.is_equivalent(u.um):
+                self.y = (np.atleast_1d(self.y.value) * self.y.unit).to(u.um)
             else:
                 raise TypeError('The y-coordinate must be an astropy.Quantity or float or sequence of floats.')
             
             # Check z
-            if not isinstance(self.z, u.Quantity) and isinstance(self.z, (Sequence, np.ndarray, float, int)):
-                self.z = np.atleast_1d(self.z) * u.um
-            elif self.z.unit.is_equivalent(u.um):
-                self.z = np.atleast_1d(self.z.value) * u.um
+            if isinstance(self.z, (float, int)):
+                self.z = np.array([self.z]) * u.um
+            elif isinstance(self.z, (Sequence, np.ndarray)) and not isinstance(self.z, u.Quantity):
+                self.z = np.asarray(self.z) * u.um
+            elif isinstance(self.z, u.Quantity) and self.z.unit.is_equivalent(u.um):
+                self.z = (np.atleast_1d(self.z.value) * self.z.unit).to(u.um)
             else:
                 raise TypeError('The z-coordinate must be an astropy.Quantity or float or sequence of floats.')
-            
-            if not self.x.shape == self.y.shape == self.z.shape:
-                raise ValueError('The x, y, and z coordinates must have the same shape. Either all scalars or all arrays from np.meshgrid().')
 
 
         
