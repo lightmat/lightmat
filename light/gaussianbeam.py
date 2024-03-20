@@ -81,7 +81,7 @@ class GaussianBeam(object):
                       Carteesian coordinate system. This is just the electric field strength multiplied by ``pol_3d_vec``. 
                       Here, x, y, z are the global standard Carteesian coordinates in [um] and can be either float or array
                       obtained from np.meshgrid().
-        I(x,y,z): Returns the intensity of the beam at the position (x,y,z) in [W/m^2]. Here, x, y, z are the global
+        I(x,y,z): Returns the intensity of the beam at the position (x,y,z) in [mW/cm^2]. Here, x, y, z are the global
                   standard Carteesian coordinates in [um] and can be either float or array obtained from np.meshgrid().
     """
     def __init__(
@@ -352,6 +352,29 @@ class GaussianBeam(object):
         ]) * E.unit
         
         return Evec
+    
+
+    def I(
+            self,
+            x: Union[float, Sequence[float], np.ndarray, u.Quantity],
+            y: Union[float, Sequence[float], np.ndarray, u.Quantity],
+            z: Union[float, Sequence[float], np.ndarray, u.Quantity],
+    ) -> u.Quantity:    
+        """Returns the intensity of the beam at the position (x,y,z) in [mW/cm^2]. Here, x, y, z are the global standard Carteesian
+           coordinates in [um] and can be either float or array obtained from np.meshgrid().
+
+           Args:
+                x: Global standard Carteesian coordinate in [um].
+                y: Global standard Carteesian coordinate in [um].
+                z: Global standard Carteesian coordinate in [um].
+
+           Returns:
+                u.Quantity: Intensity of the beam at the position (x,y,z) in [mW/cm^2], can be either float or array.
+        """
+        E = self.E(x, y, z)
+        I = (c*eps0/2 * np.abs(E)**2).to(u.mW/u.cm**2)
+
+        return I
 
 
 
