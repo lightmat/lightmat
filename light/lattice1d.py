@@ -5,10 +5,11 @@ from scipy.spatial.transform import Rotation as R
 from typing import Union, Tuple
 from collections.abc import Sequence
 
+from .laser import Laser
 from .gaussianbeam import GaussianBeam
 
 
-class Lattice1d(object):
+class Lattice1d(Laser):
 
     def __init__(
             self,

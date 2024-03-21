@@ -4,9 +4,11 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence
 
+from .laser import Laser
 
 
-class GaussianBeam(object):
+
+class GaussianBeam(Laser):
     """
     A class representing a Gaussian laser beam.
     In the local coordinate system of this GaussianBeam instance, the beam propagates along the local
@@ -331,7 +333,7 @@ class GaussianBeam(object):
             x: Union[float, Sequence[float], np.ndarray, u.Quantity],
             y: Union[float, Sequence[float], np.ndarray, u.Quantity],
             z: Union[float, Sequence[float], np.ndarray, u.Quantity],
-    ) -> np.ndarray:
+    ) -> u.Quantity:
         """Returns the complex electric field vector of the beam at the position (x,y,z) in [V/m] in the standard Carteesian coordinate system.
            This is just the complex electric field amplitude multiplied by the 3d polarization vector. Here, x, y, z are the global
            standard Carteesian coordinates in [um] and can be either float or array obtained from np.meshgrid().
@@ -342,7 +344,7 @@ class GaussianBeam(object):
                 z: Global standard Carteesian coordinate in [um].
                 
            Returns:
-                np.ndarray: Complex electric field vector of the beam at the position (x,y,z) in [V/m] in the standard Carteesian coordinate system.
+                u.Quantity: Complex electric field vector of the beam at the position (x,y,z) in [V/m] in the standard Carteesian coordinate system.
         """
         E = self.E(x, y, z)
         Evec = np.array([
