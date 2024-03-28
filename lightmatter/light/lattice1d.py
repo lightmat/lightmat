@@ -40,13 +40,16 @@ class Lattice1d(Laser):
            Returns:
                 None           
         """
-        self.lattice_direction_vec = np.asarray(lattice_direction_vec)
+        self.lattice_direction_vec = lattice_direction_vec
         self.intersect_angle = intersect_angle
         self.pol_Jones_vec = pol_Jones_vec
         self.lambda_ = lambda_
         self.w0 = w0
         self.P = P
         self.z0 = z0
+        self._check_input('init')
+
+        super().__init__(self.lambda_, self.P)
 
         # Calculate the beam directions
         self.beam_direction_forward_vec, self.beam_direction_backward_vec = self._calculate_beam_directions()
@@ -167,4 +170,84 @@ class Lattice1d(Laser):
         beam_direction_backward_vec = - rotation_backward.apply(self.lattice_direction_vec)
 
         return beam_direction_forward_vec, beam_direction_backward_vec
+    
+
+
+    def _check_input(
+            self, 
+            method: str,
+    ) -> None:
+        """Checks the input of the method ``method``."""
+        if method == 'init':
+            # Check lattice direction vector
+            if not isinstance(self.lattice_direction_vec, (Sequence, np.ndarray)): 
+                raise TypeError('The beam_direction_vec must be a sequence.')
+            if not len(self.lattice_direction_vec) == 3:
+                raise ValueError('The beam_direction_vec must be a 3d vector.')
+            self.lattice_direction_vec = np.asarray(self.lattice_direction_vec)
+            self.lattice_direction_vec = self.lattice_direction_vec / np.linalg.norm(self.lattice_direction_vec)  # Normalize
+
+            # Check intersect angle
+            if not isinstance(self.intersect_angle, (float, int)):
+                raise TypeError('The intersect_angle must be a float.')
+            if self.intersect_angle > 180 or self.intersect_angle < 0:
+                raise ValueError('The intersect_angle must be in the range [0, 180].')
+
+            # Check polarization Jones vector
+            if not isinstance(self.pol_Jones_vec, (Sequence, np.ndarray)):
+                raise TypeError('The pol_Jones_vec must be a sequence.')
+            if not len(self.pol_Jones_vec) == 2:
+                raise ValueError('The pol_Jones_vec must be a 2d vector.')
+            self.pol_Jones_vec = np.asarray(self.pol_Jones_vec)
+            self.pol_Jones_vec = self.pol_Jones_vec / np.linalg.norm(self.pol_Jones_vec)  # Normalize
+
+            # Check wavelength
+            if isinstance(self.lambda_, (float, int)):
+                self.lambda_ = self.lambda_ * u.nm
+            elif isinstance(self.lambda_, u.Quantity) and self.lambda_.unit.is_equivalent(u.nm):
+                if np.isscalar(self.lambda_.value):
+                    self.lambda_ = self.lambda_.to(u.nm)
+                else:
+                    raise TypeError('The wavelength lambda_ must be an astropy.Quantity or float.')
+            else:
+                raise TypeError('The wavelength lambda_ must be an astropy.Quantity or float.')
+
+            
+            # Check beam waist diameter
+            if isinstance(self.w0, (float, int)):
+                self.w0 = self.w0 * u.um
+            elif isinstance(self.w0, (Sequence, np.ndarray)) and not isinstance(self.w0, u.Quantity) and len(self.w0) == 2:
+                self.w0 = np.asarray(self.w0) * u.um
+            elif isinstance(self.w0, u.Quantity) and self.w0.unit.is_equivalent(u.um):
+                if np.isscalar(self.w0.value):
+                    self.w0 = self.w0.to(u.um)
+                elif len(self.w0.value) == 2:
+                    self.w0 = self.w0.to(u.um)
+                else:
+                    raise ValueError('The beam waist diameter w0 must be a scalar or sequence of two floats.')
+            else:
+                raise TypeError('The beam waist diameter w0 must be an astropy.Quantity or float or sequence of floats.')
+
+            
+            # Check power
+            if isinstance(self.P, (float, int)):
+                self.P = self.P * u.W
+            elif isinstance(self.P, u.Quantity) and self.P.unit.is_equivalent(u.W):
+                if np.isscalar(self.P.value):
+                    self.P = self.P.to(u.W)
+                else:
+                    raise TypeError('The power P must be an astropy.Quantity or float.')
+            else:
+                raise TypeError('The power P must be an astropy.Quantity or float.')
+            
+            # Check position of the beam waist
+            if isinstance(self.z0, (float, int)):
+                self.z0 = self.z0 * u.um
+            elif isinstance(self.z0, u.Quantity) and self.z0.unit.is_equivalent(u.um):
+                if np.isscalar(self.z0.value):
+                    self.z0 = self.z0.to(u.um)
+                else:
+                    raise TypeError('The position of the beam waist z0 must be an astropy.Quantity or float.')
+            else:
+                raise TypeError('The position of the beam waist z0 must be an astropy.Quantity or float.')
     

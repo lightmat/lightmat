@@ -48,6 +48,7 @@ class Atom(object):
             self,
             F: Union[float, Sequence[float]],
     ) -> Union[float, Sequence[float]]:
+        """Calculate the energy difference of the hyperfine state |F> w.r.t. """
         self.F = F
         self._check_input('hfs_energy_split')
 

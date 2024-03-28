@@ -9,11 +9,15 @@ class Laser(ABC):
     @abstractmethod
     def __init__(
         self,
+        lambda_: Union[u.Quantity, float],
+        P: Union[u.Quantity, float],
     ) -> None:
         """
         Initializes the laser.
         """
-        pass
+        self.lambda_ = lambda_
+        self.P = P
+        self.k = (2*np.pi / (self.lambda_)).to(1/u.um)
     
 
     @abstractmethod
