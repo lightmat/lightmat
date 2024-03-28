@@ -215,9 +215,14 @@ class GaussianBeam(Laser):
             x: sp.Symbol, 
             y: sp.Symbol, 
             z: sp.Symbol,
-    ) -> u.Quantity:
+    ):
+        self.x = x
+        self.y = y
+        self.z = z
+        self._check_input('E_sym')
+
         # Transform gobal coordinates to local coordinates
-        r = sp.Matrix([x, y, z])
+        r = sp.Matrix([self.x, self.y, self.z])
         r_local = self._rotation_matrix_sym.T * r # inverse of rotation matrix is transpose
         x_local, y_local, z_local = r_local[0], r_local[1], r_local[2]
 
@@ -245,7 +250,32 @@ class GaussianBeam(Laser):
                                  + 1j * (Psiz[0]/2 + Psiz[1]/2) \
                                  - 1j * k * z_local)
 
-        return E
+        return E 
+    
+
+
+    def E_vec_sym(
+            self,
+            x: sp.Symbol, 
+            y: sp.Symbol, 
+            z: sp.Symbol,
+    ):
+        E = self.E_sym(x, y, z)
+        Evec = E * sp.Matrix(self.pol_3d_vec)
+        
+        return Evec
+    
+
+    def I_sym(
+            self,
+            x: sp.Symbol, 
+            y: sp.Symbol, 
+            z: sp.Symbol,
+    ):
+        E = self.E_sym(x, y, z)
+        I = (c.to(u.m/u.s).value*eps0.value/2 * abs(E)**2)
+
+        return I
 
 
 
@@ -671,6 +701,26 @@ class GaussianBeam(Laser):
                 self.z = (np.atleast_1d(self.z.value) * self.z.unit).to(u.um)
             else:
                 raise TypeError('The z-coordinate must be an astropy.Quantity or float or sequence of floats.')
+            
+
+        elif method == 'E_sym':
+            # Check x
+            if not isinstance(self.x, sp.Symbol):
+                raise TypeError('The x-coordinate must be a sympy.Symbol.')
+            if not self.x.is_real:
+                raise TypeError('The x-coordinate must be a real sympy.Symbol.')
+            
+            # Check y
+            if not isinstance(self.y, sp.Symbol):
+                raise TypeError('The y-coordinate must be a sympy.Symbol.')
+            if not self.y.is_real:
+                raise TypeError('The y-coordinate must be a real sympy.Symbol.')
+            
+            # Check z
+            if not isinstance(self.z, sp.Symbol):
+                raise TypeError('The z-coordinate must be a sympy.Symbol.')
+            if not self.z.is_real:
+                raise TypeError('The z-coordinate must be a real sympy.Symbol.')
 
 
         

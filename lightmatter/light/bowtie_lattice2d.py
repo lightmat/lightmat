@@ -1,6 +1,7 @@
 from astropy import units as u
 from astropy.constants import c, eps0
 import numpy as np
+import sympy as sp
 from scipy.spatial.transform import Rotation as R
 from typing import Union, Tuple
 from collections.abc import Sequence
@@ -87,6 +88,38 @@ class BowtieLattice2d(Laser):
                 P=self.P,
                 z0=self.z0,
             )
+
+
+        def E_vec_sym(
+                self,
+                x: sp.Symbol,
+                y: sp.Symbol,
+                z: sp.Symbol,
+        ):
+            E_vec = self.beam_forward1.E_vec_sym(x, y, z) + self.beam_backward1.E_vec_sym(x, y, z) + \
+                    self.beam_forward2.E_vec_sym(x, y, z) + self.beam_backward2.E_vec_sym(x, y, z)
+            return E_vec
+        
+
+        def E_sym(
+                self,
+                x: sp.Symbol,
+                y: sp.Symbol,
+                z: sp.Symbol,
+        ):
+            return self.E_vec_sym(x, y, z).norm()
+        
+
+        def I_sym(
+                self,
+                x: sp.Symbol,
+                y: sp.Symbol,
+                z: sp.Symbol,
+        ):
+            E = self.E_sym(x, y, z)
+            I = (c.to(u.m/u.s).value*eps0.value/2 * abs(E)**2)
+
+            return I
 
 
 

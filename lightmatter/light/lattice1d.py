@@ -1,6 +1,7 @@
 from astropy import units as u
 from astropy.constants import c, eps0
 import numpy as np
+import sympy as sp
 from scipy.spatial.transform import Rotation as R
 from typing import Union, Tuple
 from collections.abc import Sequence
@@ -73,6 +74,19 @@ class Lattice1d(Laser):
             z0=self.z0,
         )
 
+
+
+
+    def E_vec_sym(
+            self,
+            x: sp.Symbol,
+            y: sp.Symbol,
+            z: sp.Symbol,
+    ):
+        E_forward = self.beam_forward.E_vec_sym(x, y, z)
+        E_backward = self.beam_backward.E_vec_sym(x, y, z)
+        return E_forward + E_backward
+
         
         
     def E_vec(
@@ -96,6 +110,26 @@ class Lattice1d(Laser):
         return E_forward + E_backward
     
 
+    def E_sym(
+            self,
+            x: sp.Symbol,
+            y: sp.Symbol,
+            z: sp.Symbol,
+    ):
+        return self.E_vec_sym(x, y, z).norm()
+        
+
+    def I_sym(
+            self,
+            x: sp.Symbol,
+            y: sp.Symbol,
+            z: sp.Symbol,
+    ):
+        E = self.E_sym(x, y, z)
+        I = (c.to(u.m/u.s).value*eps0.value/2 * abs(E)**2)
+
+        return I
+    
 
 
     def E(

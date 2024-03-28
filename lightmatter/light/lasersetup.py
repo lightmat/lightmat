@@ -1,6 +1,7 @@
 from astropy import units as u
 from astropy.constants import c, eps0
 import numpy as np
+import sympy as sp
 from scipy.spatial.transform import Rotation as R
 from typing import Union, Tuple
 from collections.abc import Sequence
@@ -26,6 +27,20 @@ class LaserSetup(object):
             self._check_input('init')
 
         
+
+        def I_sym(
+                self,
+                x: sp.Symbol,
+                y: sp.Symbol,
+                z: sp.Symbol,
+        ):
+            I = 0
+            for laser in self.lasers:
+                I = I + laser.I_sym(x, y, z)
+
+            return I
+        
+
 
         def I(
                 self,
