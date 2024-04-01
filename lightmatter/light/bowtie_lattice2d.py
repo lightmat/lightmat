@@ -22,6 +22,7 @@ class BowtieLattice2d(Laser):
                 w0: Union[u.Quantity, float, Sequence[float], np.ndarray],
                 P: Union[u.Quantity, float],
                 z0: Union[u.Quantity, float] = 0 * u.um,
+                name: str = 'BowtieLattice2d',
         ) -> None:
             """Initializes a BowtieLattice2d instance.
     
@@ -49,9 +50,16 @@ class BowtieLattice2d(Laser):
             self.w0 = w0
             self.P = P
             self.z0 = z0
+            self.name = name
             self._check_input('init')
 
-            super().__init__(self.lambda_, self.P)
+            super().__init__(
+                self.name,
+                [self.lattice_direction_vec1, -self.lattice_direction_vec1, 
+                 self.lattice_direction_vec2, -self.lattice_direction_vec2,],
+                self.lambda_, 
+                self.P,
+            )
     
             self.beam_forward1 = GaussianBeam(
                 beam_direction_vec=self.lattice_direction_vec1,
@@ -141,7 +149,7 @@ class BowtieLattice2d(Laser):
             """
             E_vec = self.beam_forward1.E_vec(x, y, z) + self.beam_backward1.E_vec(x, y, z) + \
                     self.beam_forward2.E_vec(x, y, z) + self.beam_backward2.E_vec(x, y, z)
-            return E_vec
+            return E_vec.to(u.V/u.m)
         
 
         def E(
@@ -160,7 +168,7 @@ class BowtieLattice2d(Laser):
             Returns:
                     np.ndarray: The electric field of the lattice beam at the given position.
             """
-            return np.linalg.norm(self.E_vec(x, y, z), axis=0)
+            return np.linalg.norm(self.E_vec(x, y, z), axis=0).to(u.V/u.m)
         
 
         def I(
@@ -179,7 +187,7 @@ class BowtieLattice2d(Laser):
             Returns:
                     np.ndarray: The intensity of the lattice beam at the given position.
             """
-            return c*eps0/2 * np.abs(self.E(x, y, z))**2
+            return (c*eps0/2 * np.abs(self.E(x, y, z))**2).to(u.mW/u.cm**2)
         
 
 
@@ -263,3 +271,7 @@ class BowtieLattice2d(Laser):
                         raise TypeError('The position of the beam waist z0 must be an astropy.Quantity or float.')
                 else:
                     raise TypeError('The position of the beam waist z0 must be an astropy.Quantity or float.')
+                
+                # Check name
+                if not isinstance(self.name, str):
+                    raise TypeError('The name must be a string.')

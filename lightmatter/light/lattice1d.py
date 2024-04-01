@@ -21,6 +21,7 @@ class Lattice1d(Laser):
             w0: Union[u.Quantity, float, Sequence[float], np.ndarray],
             P: Union[u.Quantity, float],
             z0: Union[u.Quantity, float] = 0 * u.um,
+            name: str = 'Lattice1d',
     ) -> None:
         """Initializes a Lattice1d instance.
         
@@ -48,12 +49,18 @@ class Lattice1d(Laser):
         self.w0 = w0
         self.P = P
         self.z0 = z0
+        self.name = name
         self._check_input('init')
-
-        super().__init__(self.lambda_, self.P)
 
         # Calculate the beam directions
         self.beam_direction_forward_vec, self.beam_direction_backward_vec = self._calculate_beam_directions()
+
+        super().__init__(
+            self.name,
+            [self.beam_direction_forward_vec, self.beam_direction_backward_vec], 
+            self.lambda_, 
+            self.P
+        )
 
         # Create the two GaussianBeam instances for the two counterpropagating lattice beams
         self.beam_forward = GaussianBeam(
@@ -86,28 +93,6 @@ class Lattice1d(Laser):
         E_forward = self.beam_forward.E_vec_sym(x, y, z)
         E_backward = self.beam_backward.E_vec_sym(x, y, z)
         return E_forward + E_backward
-
-        
-        
-    def E_vec(
-            self,
-            x: Union[u.Quantity, float, Sequence[float], np.ndarray],
-            y: Union[u.Quantity, float, Sequence[float], np.ndarray],
-            z: Union[u.Quantity, float, Sequence[float], np.ndarray],
-    ) -> u.Quantity:
-        """Returns the electric field vector of the 1d lattice at the given position.
-        
-           Args:
-                x: x-coordinate of the position in [um].
-                y: y-coordinate of the position in [um].
-                z: z-coordinate of the position in [um].
-
-           Returns:
-                np.ndarray: The electric field vector of the lattice beam at the given position.
-        """
-        E_forward = self.beam_forward.E_vec(x, y, z)
-        E_backward = self.beam_backward.E_vec(x, y, z)
-        return E_forward + E_backward
     
 
     def E_sym(
@@ -131,6 +116,26 @@ class Lattice1d(Laser):
         return I
     
 
+    def E_vec(
+            self,
+            x: Union[u.Quantity, float, Sequence[float], np.ndarray],
+            y: Union[u.Quantity, float, Sequence[float], np.ndarray],
+            z: Union[u.Quantity, float, Sequence[float], np.ndarray],
+    ) -> u.Quantity:
+        """Returns the electric field vector of the 1d lattice at the given position.
+        
+           Args:
+                x: x-coordinate of the position in [um].
+                y: y-coordinate of the position in [um].
+                z: z-coordinate of the position in [um].
+
+           Returns:
+                np.ndarray: The electric field vector of the lattice beam at the given position.
+        """
+        E_forward = self.beam_forward.E_vec(x, y, z)
+        E_backward = self.beam_backward.E_vec(x, y, z)
+        return (E_forward + E_backward).to(u.V/u.m)
+
 
     def E(
             self,
@@ -148,7 +153,7 @@ class Lattice1d(Laser):
            Returns:
                 np.ndarray: The electric field of the lattice beam at the given position.
         """
-        return np.linalg.norm(self.E_vec(x, y, z), axis=0)
+        return np.linalg.norm(self.E_vec(x, y, z), axis=0).to(u.V/u.m)
     
 
 
@@ -168,7 +173,7 @@ class Lattice1d(Laser):
            Returns:
                 np.ndarray: The intensity of the lattice beam at the given position.
         """
-        return c*eps0/2 * np.abs(self.E(x, y, z))**2
+        return (c*eps0/2 * np.abs(self.E(x, y, z))**2).to(u.mW/u.cm**2)
     
 
 
@@ -284,4 +289,8 @@ class Lattice1d(Laser):
                     raise TypeError('The position of the beam waist z0 must be an astropy.Quantity or float.')
             else:
                 raise TypeError('The position of the beam waist z0 must be an astropy.Quantity or float.')
+            
+            # Check name
+            if not isinstance(self.name, str):
+                raise TypeError('The name must be a string.')
     

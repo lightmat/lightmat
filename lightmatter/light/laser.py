@@ -9,12 +9,16 @@ class Laser(ABC):
     @abstractmethod
     def __init__(
         self,
+        name: str,
+        beam_directions: Union[Sequence[float], np.ndarray],
         lambda_: Union[u.Quantity, float],
         P: Union[u.Quantity, float],
     ) -> None:
         """
         Initializes the laser.
         """
+        self.name = name
+        self.beam_directions = np.atleast_1d(beam_directions)
         self.lambda_ = lambda_
         self.P = P
         self.k = (2*np.pi / (self.lambda_)).to(1/u.um)
