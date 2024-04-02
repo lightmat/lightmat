@@ -130,7 +130,7 @@ class LaserSetup(object):
             colors = ['cyan', 'magenta', 'yellow', 'green', 'red', 'blue', 'orange', 'purple']
             
             for i, laser in enumerate(self.lasers):
-                color = colors[i % len(colors)]
+                color = colors[i % len(colors)] if laser.color is None else laser.color
                 for j, direction in enumerate(laser.beam_directions):
                     # Normalize the direction
                     direction = np.array(direction) / np.linalg.norm(direction)
@@ -143,8 +143,7 @@ class LaserSetup(object):
                     end_point_positive = direction * scale_factor
                     end_point_negative = direction * -scale_factor
 
-                    # Plotting the beam line
-                    # Since you're creating a fading effect with multiple lines, apply this to both directions
+                    # Plotting the beam line with shading effect
                     for k in range(1, 15):
                         ax.plot(*np.column_stack((end_point_negative, end_point_positive)), color=color,
                                 linewidth=1 + k * 0.5, alpha=1 / k,
@@ -171,6 +170,8 @@ class LaserSetup(object):
             if method == 'init':
                 if not isinstance(self.lasers, (Laser, Sequence)):
                     raise ValueError("The input beams must be a single or sequence of Laser instances.")
+                if isinstance(self.lasers, Laser):
+                    self.lasers = np.array([self.lasers])
                 if isinstance(self.lasers, Sequence):
                     for laser in self.lasers:
                         if not isinstance(laser, Laser):

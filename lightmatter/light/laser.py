@@ -13,15 +13,17 @@ class Laser(ABC):
         beam_directions: Union[Sequence[float], np.ndarray],
         lambda_: Union[u.Quantity, float],
         P: Union[u.Quantity, float],
+        color: str = None,
     ) -> None:
         """
         Initializes the laser.
         """
         self.name = name
-        self.beam_directions = np.atleast_1d(beam_directions)
+        self.beam_directions = np.atleast_2d(beam_directions)
         self.lambda_ = lambda_
         self.P = P
         self.k = (2*np.pi / (self.lambda_)).to(1/u.um)
+        self.color = color
     
 
     @abstractmethod

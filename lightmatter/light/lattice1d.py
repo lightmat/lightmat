@@ -22,6 +22,7 @@ class Lattice1d(Laser):
             P: Union[u.Quantity, float],
             z0: Union[u.Quantity, float] = 0 * u.um,
             name: str = 'Lattice1d',
+            color: str = None,
     ) -> None:
         """Initializes a Lattice1d instance.
         
@@ -50,6 +51,7 @@ class Lattice1d(Laser):
         self.P = P
         self.z0 = z0
         self.name = name
+        self.color = color
         self._check_input('init')
 
         # Calculate the beam directions
@@ -59,7 +61,8 @@ class Lattice1d(Laser):
             self.name,
             [self.beam_direction_forward_vec, self.beam_direction_backward_vec], 
             self.lambda_, 
-            self.P
+            self.P,
+            self.color,
         )
 
         # Create the two GaussianBeam instances for the two counterpropagating lattice beams

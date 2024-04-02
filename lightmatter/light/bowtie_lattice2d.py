@@ -23,6 +23,7 @@ class BowtieLattice2d(Laser):
                 P: Union[u.Quantity, float],
                 z0: Union[u.Quantity, float] = 0 * u.um,
                 name: str = 'BowtieLattice2d',
+                color: str = None,
         ) -> None:
             """Initializes a BowtieLattice2d instance.
     
@@ -51,6 +52,7 @@ class BowtieLattice2d(Laser):
             self.P = P
             self.z0 = z0
             self.name = name
+            self.color = color
             self._check_input('init')
 
             super().__init__(
@@ -59,6 +61,7 @@ class BowtieLattice2d(Laser):
                  self.lattice_direction_vec2, -self.lattice_direction_vec2,],
                 self.lambda_, 
                 self.P,
+                self.color,
             )
     
             self.beam_forward1 = GaussianBeam(

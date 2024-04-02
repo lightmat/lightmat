@@ -1,6 +1,7 @@
 from astropy import units as u
 from astropy.constants import c, eps0
 import numpy as np
+import matplotlib.pyplot as plt
 import sympy as sp
 from typing import Union
 from collections.abc import Sequence
@@ -96,6 +97,7 @@ class GaussianBeam(Laser):
             P: Union[u.Quantity, float],
             z0: Union[u.Quantity, float] = 0 * u.um,
             name: str = "GaussianBeam",
+            color: str = None,
     ) -> None:
         """Initializes a GaussianBeam instance.
         
@@ -123,9 +125,10 @@ class GaussianBeam(Laser):
         self.P = P
         self.z0 = z0
         self.name = name
+        self.color = color
         self._check_input('init')
 
-        super().__init__(self.name, self.beam_direction_vec, self.lambda_, self.P)
+        super().__init__(self.name, self.beam_direction_vec, self.lambda_, self.P, self.color)
 
         # Calculate derived attributes
         self.k = (2*np.pi / (self.lambda_)).to(1/u.um)
@@ -302,7 +305,7 @@ class GaussianBeam(Laser):
                                  - 1j * self.k * (x_local**2 / (2*Rz[0]) + y_local**2 / (2*Rz[1])) \
                                  + 1j * (Psiz[0]/2 + Psiz[1]/2) \
                                  - 1j * self.k * z_local)
-
+            
 
         # Mask to handle calculation differently at the beam waist location z=z0 in order to avoid division by zero in the exponential
         # due to zero wavefront curvature at the beam waist
