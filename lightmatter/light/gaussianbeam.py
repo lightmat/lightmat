@@ -712,7 +712,8 @@ class GaussianBeam(Laser):
         self,
     ):
         beam_direction_vec = sp.Matrix(self.beam_direction_vec)
-        assert beam_direction_vec.norm() == 1, "beam_direction_vec must be a unit vector"
+        beam_direction_vec = beam_direction_vec / beam_direction_vec.norm()  # Normalize
+        #assert beam_direction_vec.norm() == 1, "beam_direction_vec must be a unit vector"
         
         # Choosing local x-axis based on the beam direction
         if beam_direction_vec[0] != 0:
