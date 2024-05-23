@@ -8,6 +8,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import astropy.units as u
 from astropy.constants import hbar, k_B
 from astropy.units import Quantity
+from matplotlib.figure import Figure
 from typing import Union
 
 from .particle_props import ParticleProps
@@ -26,12 +27,11 @@ class BoseGas:
 
     The condensed part is calculated in two possible ways:
     Either using the Thomas-Fermi approximation, i.e. n0(r) = max((mu-V_eff(r))/g*2, 0) with V_eff(r) = V_trap(r) + 2*g*n_ex(r).
-    Or using energy functional minimization, i.e. minimizing the energy functional E[n0] = Ekin[n0] + Epot[n0] + Echem[n0] w.r.t. 
-    n0(r).
+    Or using energy functional minimization, i.e. minimizing the energy functional E[n0] = Ekin[n0] + Epot[n0] w.r.t. n0(r).
 
-    The non-condensed part is calculated semiclassically using either the Hartree-Fock or Popov approximation, i.e.
-    n_ex(r) = int d^3p (2*pi*hbar)**-3 * 1/(exp((eps_p(r)-mu)/k_B/T) - 1) with eps_p(r) either given by the semiclassical HF or
-    Popov approximation.
+    The non-condensed part is calculated semiclassically using either the Hartree-Fock or Popov single-particle energy, i.e.
+    n_ex(r) = int d^3p (2*pi*hbar)**-3 * 1/(exp((eps_p(r)-mu)/k_B/T) - 1) with eps_p(r) either given by the HF or Popov mean 
+    field approximation.
 
     The total density is then given by n(r) = n0(r) + n_ex(r).
 
@@ -70,6 +70,12 @@ class BoseGas:
         plot_density_1d(): Plot the density along x-, y- and z-direction, i.e. n(x,0,0), n(0,y,0) and n(0,0,z).
         plot_density_2d(): Plot the density in the xy-, xz- and yz-plane, i.e. n(x,y,0), n(x,0,z) and n(0,y,z).
         plot_all(): Plot all of the above plots.
+
+    ----------------------------------------------------------------------------------------------------------------------------------
+
+    Note:
+        The class uses units from the `astropy.units` module for physical quantities.
+        It is important to ensure that the input parameters are given in the correct units or are appropriately converted.
     """
     def __init__(
             self, 
@@ -78,7 +84,7 @@ class BoseGas:
             init_with_zero_T: bool = True,
             zero_T_threshold: float = 0.01,
             **basis_set_kwargs,
-        ):
+        ) -> None:
         """Initialize BoseGas class. 
         
            Args:
@@ -124,6 +130,7 @@ class BoseGas:
         # already zero, we don't run this in order to not disturb the workflow of always running eval_density() 
         # after initializing this class.
         if self.init_with_zero_T and self.particle_props.T.value > self.zero_T_threshold:
+            print("Perform zero temperature calculation with TF and HF approximaiton for initialization.")
             T = self.particle_props.T
             self.particle_props.T = 0 * u.nK 
             self.eval_density(use_TF=True, use_HF=True, show_progress=False)       
@@ -144,7 +151,7 @@ class BoseGas:
             cutoff_factor: float = 10,
             print_convergence_info_at_this_iteration: int = 0,
             show_progress: bool = True,
-        ):
+        ) -> None:
         """Run the iterative procedure to update in turn the densities `n_0_array` and `n_ex_array`. 
            The procedure is repeated until the chemical potential is converged or the maximum number 
            of iterations is reached. After running this method, the total density `n_array`, condensed 
@@ -180,13 +187,12 @@ class BoseGas:
                               which iteration convergence was reached. Defaults to True.
         """
         # Approximations
-        if not hasattr(self, 'use_TF'):
-            self.use_TF = use_TF 
-        if not hasattr(self, 'use_HF'): 
-            self.use_HF = use_HF
-
-        if init_with_TF and not self.use_TF:
-            print("Initial n0 is calculated with the Thomas-Fermi approximation, then functional energy minimization is used.")
+        self.use_TF = use_TF 
+        self.use_HF = use_HF
+        if self.use_TF:
+            self.init_with_TF = False
+        else:
+            self.init_with_TF = init_with_TF
 
         # Set up convergence history list for the plot_convergence_history() method
         self.convergence_history_mu = [self.mu.value]
@@ -195,40 +201,83 @@ class BoseGas:
         # Store mu_change_rate (gets dynamically adjusted during iterative procedure to ensure convergence)
         if mu_change_rate is not None:
             self.mu_change_rate = mu_change_rate
-        else:
+        else: # Set default value if None is provided
             if not hasattr(self, 'mu_change_rate'):
                 self.mu_change_rate = 0.01
-            
+
+        # Print some info if show_progress is True
+        if show_progress:
+            if self.init_with_TF and not self.use_TF:
+                if self.particle_props.T.value == 0:
+                    print("Initial n0 is calculated with the TF approximation. Afterwards functional energy minimization will be performed...")
+                else:
+                    raise NotImplementedError("RDMFT is not yet implemented. For T>0, please put use_TF=True.")
+            elif self.use_TF:
+                if self.use_HF:
+                    print("Calculate n0 with TF approximation and n_ex with semiclassical HF approximation...")
+                else:
+                    print("Calculate n0 with TF approximation and n_ex with semiclassical Popov approximation...")
+            else:
+                if self.particle_props.T.value == 0:
+                    if self.use_HF:
+                        print("Calculate n0 with energy functional minimization and n_ex with semiclassical HF approximation...")
+                    else:
+                        print("Calculate n0 with energy functional minimization and n_ex with semiclassical Popov approximation...")
+                else:
+                    raise NotImplementedError("RDMFT is not yet implemented. For T>0, please put use_TF=True.")
+
         # Run iterative procedure to update the densities
         iterator = tqdm(range(max_iter)) if show_progress else range(max_iter)
         for iteration in iterator: 
             # Update the condensed and thermal density with the above specified approximations
-            self._update_density_and_chem_potential(init_with_TF, num_q_values, cutoff_factor)
+            self._update_density_and_chem_potential(
+                num_q_values, 
+                cutoff_factor,
+            )
 
             # Check convergence 
-            converged = self._check_convergence()
+            converged = self._check_convergence(
+                iteration, 
+                print_convergence_info_at_this_iteration, 
+                mu_convergence_threshold, 
+                N_convergence_threshold, 
+                show_progress,
+            )
             if converged:
                 break
 
             # Dynamically adjust `mu_change_rate` based on recent changes
-            self._dynamically_adjust_mu_change_rate(iteration, mu_change_rate_adjustment)
+            self._dynamically_adjust_mu_change_rate(
+                iteration, 
+                mu_change_rate_adjustment,
+            )
 
 
 
     def _update_density_and_chem_potential(
             self,
-            init_with_TF,
             num_q_values,
             cutoff_factor,
-    ):
+        ) -> None:
+        """Update the condensed and non-condensed density arrays `n0_array` and `n_ex_array` and the chemical potential `mu`.
+           The update is done by first updating the condensed density `n0_array` and then the non-condensed density `n_ex_array`.
+           The chemical potential `mu` is updated based on the normalization condition int dV (n0 + nex) = N_particles.
+           
+           Args:
+                num_q_values: number of integrand evaluations for the simpson rule in momentum space integral to 
+                              semiclassically calculate thermal density `n_ex_array`.
+                cutoff_factor: factor to determine the cutoff momentum for the momentum space integral to semiclassically
+                              calculate thermal density `n_ex_array`. The cutoff momentum is given by
+                              p_cutoff = sqrt(cutoff_factor * 2*pi*m*k*T).
+        """
         # Update condensed density n0
-         if self.use_TF or init_with_TF:
-             self._update_n0_with_TF_approximation()  
-         else:
-             if self.particle_props.T.value <= self.zero_T_threshold: # Energy functional minimization is only implemented for T=0
-                 self._calculate_n0_with_E_functional_minimization()
-             else:
-                 raise NotImplementedError("Energy functional minimization is only implemented for T=0. RDMFT is not implemented yet.")
+        if self.use_TF or self.init_with_TF:
+            self._update_n0_with_TF_approximation()  
+        else:
+            if self.particle_props.T.value <= self.zero_T_threshold: # Energy functional minimization is only implemented for T=0
+                self._calculate_n0_with_E_functional_minimization()
+            else:
+                raise NotImplementedError("Energy functional minimization is only implemented for T=0. RDMFT is not implemented yet.")
             
         # Update non-condensed density n_ex if T>0 (otherwise we have n_ex=0)
         if self.particle_props.T.value > self.zero_T_threshold:
@@ -258,8 +307,25 @@ class BoseGas:
             print_convergence_info_at_this_iteration,
             mu_convergence_threshold,
             N_convergence_threshold,
-    ):
-         # Calculate convergence info
+            show_progress,
+        ) -> None:
+        """Check if the iterative procedure has converged. The convergence criterion is met if the change in chemical potential
+           `mu` from one iteration to the next is smaller than `mu_convergence_threshold` times `mu` and the change in particle
+           number `N_particles` from one iteration to the next is smaller than `N_convergence_threshold` times `N_particles`.
+           
+           Args:
+                iteration: current iteration number.
+                print_convergence_info_at_this_iteration: if 0, don't print convergence info, if this value is i>0, 
+                                                          then print convergence info every i-th iteration.
+                mu_convergence_threshold: We call the iterative procedure converged if the change in
+                                          chemical potential from one iteration to the next is smaller than 
+                                          `mu_convergence_threshold` times mu.
+                N_convergence_threshold: We call the iterative procedure converged if the change in particle number
+                                         from one iteration to the next is smaller than `N_convergence_threshold` 
+                                         times `N_particles_target`.
+                show_progress: if True, print out when convergence was reached.
+        """
+        # Calculate convergence info
         delta_mu_value = np.abs(self.mu.value - self.convergence_history_mu[-1]) 
         self.convergence_history_mu.append(self.mu.value)
         self.convergence_history_N.append(self.N_particles)
@@ -279,10 +345,8 @@ class BoseGas:
         # Check convergence criterion
         if delta_mu_value < mu_convergence_threshold*np.abs(self.mu.value) and \
            np.abs(self.particle_props.N_particles-self.N_particles) < N_convergence_threshold*self.particle_props.N_particles:
-            if init_with_TF and not self.use_TF:
-                init_with_TF = False # set to False to continue with energy functional minimization
-                print("Initialization done. Now using energy functional minimization.")
-                continue
+            if self.init_with_TF and not self.use_TF:
+                self.init_with_TF = False # set to False to continue with energy functional minimization
             if show_progress:
                 print(f"Convergence reached after {iteration} iterations.")
             return True
@@ -296,7 +360,15 @@ class BoseGas:
             self,
             iteration,
             mu_change_rate_adjustment,
-    ):
+        ) -> None:
+        """Dynamically adjust the `mu_change_rate` hyperparameter based on recent changes in the chemical potential `mu`.
+           If the chemical potential `mu` was oscillating over the last 4 iterations, decrease the change rate to stabilize,
+           otherwise increase the change rate to speed up convergence.
+           
+           Args:
+                iteration: current iteration number.
+                mu_change_rate_adjustment: After so many iterations the `mu_change_rate` hyperparameter gets adjusted .
+        """
         if iteration % mu_change_rate_adjustment == 0 and iteration > 4:
             # Check for oscillations in mu
             oscillating = False
@@ -314,7 +386,7 @@ class BoseGas:
     def _update_n0_with_TF_approximation(
             self,
             V_additional_array: Union[Quantity, None] = None
-        ):
+        ) -> None:
         """Apply the Thomas-Fermi approximation to update the condensed density `n_0_array`, i.e.
            n0(r) = max((mu-V_eff(r))/g*2, 0) with V_eff(r) = V_trap(r) + 2*g*n_ex(r).
            If there is an additional potential V_additional(r), it gets added to V_eff(r) as well.
@@ -334,7 +406,7 @@ class BoseGas:
 
     def _calculate_n0_with_E_functional_minimization(
             self,
-        ):
+        ) -> None:
         """Minimize the energy functional E[n0] = Ekin[n0] + Epot[n0] w.r.t. n0(r) to update the
            condensed density `n_0_array` with
 
@@ -466,7 +538,7 @@ class BoseGas:
             num_q_values: int = 50,
             cutoff_factor: float = 10,
             V_additional_array: Union[Quantity, None] = None,
-        ):
+        ) -> None:
         """Apply the semiclassical Hartree-Fock or Popov approximation to update the non-condensed 
            density `n_ex_array`, i.e.
 
@@ -599,13 +671,16 @@ class BoseGas:
             start: int = 0,
             end: int = -1,
             **kwargs,
-        ):
+        ) -> Figure:
         """Plot the convergence history of the iterative procedure carried out in `eval_density()`.
 
            Args:
                 start: start index of the convergence history list to be plotted. Defaults to 0.
                 end: end index of the convergence history list to be plotted. Defaults to -1, i.e. last index.
                 **kwargs: keyword arguments for the plot, supported are 'title' and 'filename'.
+
+           Return:
+                fig: matplotlib figure object.
         """
         if (self.particle_props.T.value < self.zero_T_threshold and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
             title = kwargs.get('title', 'Convergence history, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))  
@@ -630,7 +705,7 @@ class BoseGas:
             if filename != None:
                 fig.savefig(filename, dpi=300, bbox_inches='tight')
 
-            return axs
+            return fig
         
         else:
             print("No convergence history found. Please run eval_density() first.")
@@ -640,7 +715,7 @@ class BoseGas:
             self, 
             num_points: int = 200,
             **kwargs,
-        ):
+        ) -> Figure:
         """Plot the spatial density n(x,0,0), n(0,y,0) and n(0,0,z) along each direction respectively.
         
            Args:
@@ -648,7 +723,7 @@ class BoseGas:
                 **kwargs: keyword arguments for the plot, supported are 'title' and 'filename'.
 
            Returns:
-                axs: matplotlib axes objects of the plots
+                fig: matplotlib figure object.
         """ 
         if (self.particle_props.T.value < self.zero_T_threshold and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
             title = kwargs.get('title', 'Spacial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))  
@@ -717,18 +792,18 @@ class BoseGas:
             if filename != None:
                 fig.savefig(filename, dpi=300, bbox_inches='tight')
 
-            return axs
+            return fig
         
         else:
             print("No convergence history found. Please run eval_density() first.")
-
 
 
     def plot_density_2d(
             self, 
             which: str = 'all', 
             num_points: int = 200,
-            **kwargs):
+            **kwargs,
+    ) -> Figure:
         """Plot the spatial density n(x,y,0), n(x,0,z) and n(0,y,z) along two directions respectively.
         
            Args:
@@ -737,7 +812,7 @@ class BoseGas:
                 **kwargs: keyword arguments for the plot, supported are 'title' and 'filename'.
 
            Returns:
-                axs: list of matplotlib axes objects for the plots
+                fig: matplotlib figure object of the plot
         """
         if (self.particle_props.T.value < self.zero_T_threshold and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
             title = kwargs.get('title', 'Spatial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))
@@ -809,6 +884,8 @@ class BoseGas:
 
             plt.show()
 
+            return fig
+
         else:
             print("No convergence history found. Please run eval_density() first.")
 
@@ -816,7 +893,7 @@ class BoseGas:
     def plot_all(
             self,
             which: str = 'all',
-    ):
+    ) -> None:
         """Plot convergence history and all densities.
         
            Args:
@@ -830,7 +907,7 @@ class BoseGas:
     def _check_n(
             self,
             n: Union[np.ndarray, Quantity],
-    ):
+    ) -> np.ndarray:
         """Check if the density `n` is in units of 1/um**3 and convert to unitless if so.
         
            Args:
@@ -850,7 +927,7 @@ class BoseGas:
     def _check_and_process_input(
             self,
             which_method: str,
-    ):
+    ) -> None:
         """Check and process the input arguments for selected methods.
 
            Args:

@@ -1,5 +1,4 @@
 import numpy as np
-import sparse
 from scipy.integrate import simpson
 from scipy.optimize import minimize
 from tqdm import tqdm
@@ -9,12 +8,9 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import astropy.units as u
 from astropy.constants import hbar, k_B
 from astropy.units import Quantity
-from typing import Union, Sequence
+from matplotlib.figure import Figure
+from typing import Union
 
-import warnings
-
-# Convert all warnings to errors
-#warnings.simplefilter('error')
 
 from .particle_props import ParticleProps
 from .spatial_basis import SpatialBasisSet, GridSpatialBasisSet
@@ -23,34 +19,55 @@ from .spatial_basis import SpatialBasisSet, GridSpatialBasisSet
 
 class FermiGas:
     """
-    The FermiGas class is designed to model and analyze the properties of a Fermi Gas. It allows for the 
-    calculation of the spatial density of weakly interacting fermions at low temperatures by solving the 
-    single-particle eigenvalue problem and applies the Fermi-Dirac distribution. It also fixes the chemical 
-    potential to ensure the normalization to a specific particle number.
+    Class for the calculation of the density of a Fermi gas in a given arbitrary external trapping potential. Positions r are
+    assumed to be in units of [um]. The density is in units of [1/um**3]. The temperature and energy is in units of [nK]. 
+    Throughout this class, the astropy units package is used to keep track of the units.
+
+    The density of a Fermi Gas is calculated using the Thomas-Fermi approximation at zero temperature, or the Local Density
+    Approximation (LDA) at finite temperature. Additionally, the density can be obtained via energy functional minimization
+    at zero temperature.
+
+    The density is calculated iteratively to ensure convergence. During the iterative procedure, the chemical potential mu is
+    updated to ensure that the particle number is fixed. This is done by a soft update of mu based on the normalization
+    condition int dV n = N_particles.
+
+    The iterative procedure is repeated until the chemical potential is converged or the maximum number of iterations is reached.
+
+    ----------------------------------------------------------------------------------------------------------------------------------
 
     Attributes:
-        particle_props (ParticleProps): Instance of ParticleProps class containing all relevant particle properties
-                                        such as `species`, `m`, `N_particles`, `T`, and `domain`as well as a wrapper 
-                                        method to call the `V_trap` potential.
-        num_grid_points (tuple): Number of grid points in each spatial dimension.
-        x, y, z (Quantity): 1D arrays containing the spatial grid points along each direction within the `domain` in [um].
-        dx, dy, dz (Quantity): Spacing between grid points along each direction in [um].
-        X, Y, Z (np.ndarray): 3D arrays containing the spatial grid points along each direction within the `domain` in [um].
-        V_trap_array (np.ndarray): 3D array containing the external trapping potential at each grid point in [nK].
-        mu (Quantity): Chemical potential in [nK].
-        n0_array (Quantity): 3D array containing the condensed density at each grid point in [um^-3].
-        n_ex_array (Quantity): 3D array containing the thermal density at each grid point in [um^-3].
-        n_array (Quantity): 3D array containing the total density at each grid point in [um^-3].
-        N_particles (Quantity): Total number of particles in the system.
-        N_particles_condensed (Quantity): Number of particles in the condensate.
-        N_particles_thermal (Quantity): Number of particles in the thermal cloud.
-        condensate_fraction (float): Fraction of particles in the condensate.
-        convergence_history_mu (list): List containing the chemical potential at each iteration of the iterative procedure.
-        convergence_history_N (list): List containing the total particle number at each iteration of the iterative procedure.
+        particle_props: Instance of ParticleProps class with species='fermion'.
+        spatial_basis_set: Instance of SpatialBasisSet class or string, right now only 'grid' is supported.
+        V_trap_array: Array of the external trapping potential in units of [nK].
+        mu: Chemical potential in units of [nK].
+        n_array: Density in units of [1/um**3].
+        N_particles: Total particle number.
+        convergence_history_mu: List of chemical potential values during the iterative procedure.
+        convergence_history_N: List of particle number values during the iterative procedure.
+        init_with_zero_T: If True, run a zero-temperature calculation to improve initial guess for `mu`.
+        zero_T_threshold: If the temperature is below this threshold, we assume T=0. Defaults to 0.01nK.
 
+    ----------------------------------------------------------------------------------------------------------------------------------
 
     Methods:
+        eval_density(use_TF_or_LDA=True, init_with_TF_or_LDA=True, max_iter=1000, mu_convergence_threshold=1e-5, 
+                     N_convergence_threshold=1e-3, mu_change_rate=0.1, mu_change_rate_adjustment=5, num_q_values=50,
+                     cutoff_factor=100, print_convergence_info_at_this_iteration=0, show_progress=True):
+            Run the iterative procedure to update the density `n_array`.
 
+        plot_convergence_history(start=0, end=-1, **kwargs):
+            Plot the convergence history of the iterative procedure.
+
+        plot_density_1d(num_points=200, **kwargs):
+            Plot the density along x-, y-, and z-direction, i.e. n(x,0,0), n(0,y,0) and n(0,0,z).
+
+        plot_density_2d(num_points=200, **kwargs):
+            Plot the density in the xy-, xz- and yz-plane, i.e. n(x,y,0), n(x,0,z) and n(0,y,z).
+
+        plot_all():
+            Plot all of the above plots.
+
+    ----------------------------------------------------------------------------------------------------------------------------------
 
     Note:
         The class uses units from the `astropy.units` module for physical quantities.
@@ -63,7 +80,7 @@ class FermiGas:
             init_with_zero_T: bool = True,
             zero_T_threshold: float = 0.01,
             **basis_set_kwargs,
-        ):
+        ) -> None:
         """Initialize FermiGas class. 
         
            Args:
@@ -104,9 +121,10 @@ class FermiGas:
         # already zero, we don't run this in order to not disturb the workflow of always running eval_density() 
         # after initializing this class.
         if self.init_with_zero_T and self.particle_props.T.value > self.zero_T_threshold:
+            print("Perform zero temperature calculation with TF approximaiton for initialization.")
             T = self.particle_props.T
             self.particle_props.T = 0 * u.nK 
-            self.eval_density(use_TF=True, use_LDA=False, show_progress=False)    # Check!!!   
+            self.eval_density(use_TF_or_LDA=True, show_progress=False)   
             self.particle_props.T = T
 
 
@@ -123,7 +141,7 @@ class FermiGas:
             cutoff_factor: float = 100,
             print_convergence_info_at_this_iteration: int = 0,
             show_progress: bool = True,
-        ):
+        ) -> None:
         """Run the iterative procedure to update the density `n_array`. The procedure is repeated until
            the chemical potential is converged or the maximum number of iterations is reached. You can 
            run `plot_convergence_history()` to see if you are satisfied with the convergence.
@@ -155,12 +173,37 @@ class FermiGas:
                               which convergence was reached, if False, don't use progress bar and don't print out after 
                               which iteration convergence was reached. Defaults to True.
         """
-        # Approximation
-        if not hasattr(self, 'use_TF_or_LDA'):
-            self.use_TF_or_LDA = use_TF_or_LDA
+        # Approximations
+        self.use_TF_or_LDA = use_TF_or_LDA 
+        if self.use_TF_or_LDA:
+            self.init_with_TF_or_LDA = False
+        else:
+            self.init_with_TF_or_LDA = init_with_TF_or_LDA
 
-        if init_with_TF_or_LDA and not self.use_TF_or_LDA:
-            print("Initial n is calculated with the Thomas-Fermi approximation, then functional energy minimization is used.")
+        # Store mu_change_rate (gets dynamically adjusted during iterative procedure to ensure convergence)
+        if mu_change_rate is not None:
+            self.mu_change_rate = mu_change_rate
+        else:
+            if not hasattr(self, 'mu_change_rate'):
+                self.mu_change_rate = 0.01
+
+        # Print some info if show_progress is True
+        if show_progress:
+            if self.init_with_TF_or_LDA and not self.use_TF_or_LDA:
+                if self.particle_props.T.value == 0:
+                    print("Initial n is calculated with the TF approximation. Afterwards functional energy minimization will be performed...")
+                else:
+                    raise NotImplementedError("RDMFT is not yet implemented. For T>0, please put use_TF_or_LDA=True or T=0.")
+            elif self.use_TF_or_LDA:
+                if self.particle_props.T.value == 0:
+                    print("Calculate n with TF approximation...")
+                else:
+                    print("Calculate n with LDA...")
+            else:
+                if self.particle_props.T.value == 0:
+                    print("Calculate n with energy functional minimization...")
+                else:
+                    raise NotImplementedError("RDMFT for T>0 is not implemented yet. Please put use_TF_or_LDA=True or T=0.")
 
         # Set up convergence history list for the plot_convergence_history() method
         self.convergence_history_mu = [self.mu.value]
@@ -169,73 +212,156 @@ class FermiGas:
         # Run iterative procedure to update the densities
         iterator = tqdm(range(max_iter)) if show_progress else range(max_iter)
         for iteration in iterator: 
-            # Update density n
-            if self.use_TF_or_LDA or init_with_TF_or_LDA:
-                if self.particle_props.T.value < self.zero_T_threshold:
-                    self._update_n_with_TF_approximation() # Use TF approximation if T=0
-                else:
-                    self._update_n_with_LDA(num_q_values, cutoff_factor) # Use LDA if T>0
-            else:
-                if self.particle_props.T.value < self.zero_T_threshold:
-                    self._calculate_n_with_E_functional_minimization() # Use energy functional minimization if T=0
-                else:
-                    raise NotImplementedError("RDMFT for T>0 is not implemented yet.")
-            
-            # Update the particle number
-            self.N_particles = self.spatial_basis_set.integral(self.n_array)
+            # Update the density n and the chemical potential with the above specified approximations
+            self._update_density_and_chem_potential(
+                num_q_values, 
+                cutoff_factor,
+            )
 
-            # Do soft update of the chemical potential mu based on normalization condition int dV n = N_particles.
-            # This increases mu, if N_particles is too small w.r.t N_particles_target and decreases mu if N_particles is
-            # too large w.r.t. N_particles_target.
-            new_mu_direction = (self.particle_props.N_particles - self.N_particles) / self.particle_props.N_particles * u.nK 
-            self.mu += mu_change_rate * new_mu_direction
-
-            # Calculate convergence info
-            delta_mu_value = np.abs(self.mu.value - self.convergence_history_mu[-1]) 
-            self.convergence_history_mu.append(self.mu.value)
-            self.convergence_history_N.append(self.N_particles)
-
-            # Print convergence info every other iteration
-            if print_convergence_info_at_this_iteration > 0:
-                if iteration % print_convergence_info_at_this_iteration == 0:
-                    print(f"Iteration {iteration}:")
-                    print('N: ', self.N_particles)
-                    print('mu: ', self.mu)
-                    print('delta_mu: ', delta_mu_value)
-                    print('new_mu_direction: ', new_mu_direction)
-                    print('mu_change_rate: ', mu_change_rate)
-                    print("\n")
+            # Check convergence 
+            converged = self._check_convergence(
+                iteration, 
+                print_convergence_info_at_this_iteration, 
+                mu_convergence_threshold, 
+                N_convergence_threshold, 
+                show_progress,
+            )
+            if converged:
+                break
 
             # Dynamically adjust `mu_change_rate` based on recent changes
-            if iteration % mu_change_rate_adjustment == 0 and iteration > 4:
-                # Check for oscillations in mu
-                oscillating = False
-                for i in range(1, 5): # Check if mu was oscillating over last 4 iterations
-                    if  (self.convergence_history_mu[-i] - self.convergence_history_mu[-i-1]) * \
-                        (self.convergence_history_mu[-i-1] - self.convergence_history_mu[-i-2]) < 0:
-                        oscillating = True
-                        break
-                if oscillating: # If oscillating, decrease the change rate to stabilize
-                    mu_change_rate *= 0.5 
-                else: # If not oscillating, increase the change rate to speed up convergence
-                    mu_change_rate *= 2 
+            self._dynamically_adjust_mu_change_rate(
+                iteration, 
+                mu_change_rate_adjustment,
+            )
 
 
-            # Check convergence criterion
-            if delta_mu_value < mu_convergence_threshold*np.abs(self.mu.value) and \
-               np.abs(self.particle_props.N_particles-self.N_particles) < N_convergence_threshold*self.particle_props.N_particles:
-                if init_with_TF_or_LDA and not self.use_TF_or_LDA:
-                    init_with_TF_or_LDA = False # set to False to continue with functional minimization
-                    print("Initialization done. Now using energy functional minimization.")
-                    continue
-                if show_progress:
-                    print(f"Convergence reached after {iteration} iterations.")
-                break
+
+    def _update_density_and_chem_potential(
+            self,
+            num_q_values: int = 50,
+            cutoff_factor: float = 100,
+        ) -> None:
+        """Update the density `n_array` and the chemical potential `mu`.  The chemical potential `mu` is updated based 
+           on the normalization condition int dV n = N_particles.
+        
+           Args:
+               num_q_values: number of integrand evaluations for the simpson rule in momentum space integral to 
+                             semiclassically calculate density `n_array`. Defaults to 50.
+               cutoff_factor: factor to determine the cutoff momentum for the momentum space integral to semiclassically
+                              calculate density `n_array`. The cutoff momentum is given by 
+                              p_cutoff = sqrt(cutoff_factor * 2*m*k_B*T). Defaults to 100.
+        """
+        # Update density n
+        if self.use_TF_or_LDA or self.init_with_TF_or_LDA:
+            if self.particle_props.T.value < self.zero_T_threshold:
+                self._update_n_with_TF_approximation() # Use TF approximation if T=0
+            else:
+                self._update_n_with_LDA(num_q_values, cutoff_factor) # Use LDA if T>0
+        else:
+            if self.particle_props.T.value < self.zero_T_threshold:
+                self._calculate_n_with_E_functional_minimization() # Use energy functional minimization if T=0
+            else:
+                raise NotImplementedError("RDMFT for T>0 is not implemented yet.")
+            
+        # Update the particle number
+        self.N_particles = self.spatial_basis_set.integral(self.n_array)
+
+        # Do soft update of the chemical potential mu based on normalization condition int dV n = N_particles.
+        # This increases mu, if N_particles is too small w.r.t N_particles_target and decreases mu if N_particles is
+        # too large w.r.t. N_particles_target.
+        new_mu_direction = (self.particle_props.N_particles - self.N_particles) / self.particle_props.N_particles * u.nK 
+        self.mu += self.mu_change_rate * new_mu_direction
+
+
+
+    def _check_convergence(
+            self,
+            iteration: int,
+            print_convergence_info_at_this_iteration: int,
+            mu_convergence_threshold: float,
+            N_convergence_threshold: float,
+            show_progress: bool,
+        ) -> bool:
+        """Check if the iterative procedure has converged. The convergence criterion is met if the change in chemical potential
+           `mu` from one iteration to the next is smaller than `mu_convergence_threshold` times `mu` and the change in particle
+           number `N_particles` from one iteration to the next is smaller than `N_convergence_threshold` times `N_particles`.
+           
+           Args:
+                iteration: current iteration number.
+                print_convergence_info_at_this_iteration: if 0, don't print convergence info, if this value is i>0, 
+                                                          then print convergence info every i-th iteration.
+                mu_convergence_threshold: We call the iterative procedure converged if the change in
+                                          chemical potential from one iteration to the next is smaller than 
+                                          `mu_convergence_threshold` times mu.
+                N_convergence_threshold: We call the iterative procedure converged if the change in particle number
+                                         from one iteration to the next is smaller than `N_convergence_threshold` 
+                                         times `N_particles_target`.
+                show_progress: if True, print out when convergence was reached.
+
+            Returns:
+                converged: True if convergence criterion is met, False otherwise.
+        """
+        # Calculate convergence info
+        delta_mu_value = np.abs(self.mu.value - self.convergence_history_mu[-1]) 
+        self.convergence_history_mu.append(self.mu.value)
+        self.convergence_history_N.append(self.N_particles)
+
+        # Print convergence info every other iteration
+        if print_convergence_info_at_this_iteration > 0:
+            if iteration % print_convergence_info_at_this_iteration == 0:
+                print(f"Iteration {iteration}:")
+                print('N: ', self.N_particles)
+                print('mu: ', self.mu)
+                print('delta_mu: ', delta_mu_value)
+                print('mu_change_rate: ', self.mu_change_rate)
+                print("\n")
+
+        # Check convergence criterion
+        if delta_mu_value < mu_convergence_threshold*np.abs(self.mu.value) and \
+           np.abs(self.particle_props.N_particles-self.N_particles) < N_convergence_threshold*self.particle_props.N_particles:
+            if self.init_with_TF_or_LDA and not self.use_TF_or_LDA:
+                self.init_with_TF_or_LDA = False # set to False to continue with functional minimization
+            if show_progress:
+                print(f"Convergence reached after {iteration} iterations.")
+            return True
+        
+        return False
+    
+
+
+    def _dynamically_adjust_mu_change_rate(
+            self,
+            iteration: int,
+            mu_change_rate_adjustment: int,
+        ) -> None:
+        """Dynamically adjust the `mu_change_rate` hyperparameter based on recent changes in the chemical potential `mu`.
+           If the chemical potential `mu` was oscillating over the last 4 iterations, decrease the change rate to stabilize,
+           otherwise increase the change rate to speed up convergence.
+           
+           Args:
+                iteration: current iteration number.
+                mu_change_rate_adjustment: After so many iterations the `mu_change_rate` hyperparameter gets adjusted .
+        """
+        # Dynamically adjust `mu_change_rate` based on recent changes
+        if iteration % mu_change_rate_adjustment == 0 and iteration > 4:
+            # Check for oscillations in mu
+            oscillating = False
+            for i in range(1, 5): # Check if mu was oscillating over last 4 iterations
+                if  (self.convergence_history_mu[-i] - self.convergence_history_mu[-i-1]) * \
+                    (self.convergence_history_mu[-i-1] - self.convergence_history_mu[-i-2]) < 0:
+                    oscillating = True
+                    break
+            if oscillating: # If oscillating, decrease the change rate to stabilize
+                self.mu_change_rate *= 0.5 
+            else: # If not oscillating, increase the change rate to speed up convergence
+                self.mu_change_rate *= 2 
+
 
 
     def _update_n_with_TF_approximation(
             self,
-        ):
+        ) -> None:
         """Update the density `n_array` using the Thomas-Fermi approximation. The density is zero where the
            chemical potential is smaller than the external trapping potential. Else, the density is given by
            the Thomas-Fermi approximation.
@@ -256,10 +382,18 @@ class FermiGas:
             self,
             num_q_values: int = 50,
             cutoff_factor: float = 100,
-        ):
+        ) -> None:
         """Update the density `n_array` using the local density approximation. This means unsing a semiclassical
            approximation to integrate the Fermi-Dirac distribution over momentum space, where we insert for the
-           single-particle energy the classical expression eps(p,r) = p^2/2m + V_trap(r)."""
+           single-particle energy the classical expression eps(p,r) = p^2/2m + V_trap(r).
+
+           Args:
+                num_q_values: number of integrand evaluations for the simpson rule in momentum space integral to 
+                              semiclassically calculate density `n_array`. Defaults to 50.
+                cutoff_factor: factor to determine the cutoff momentum for the momentum space integral to semiclassically
+                              calculate density `n_array`. The cutoff momentum is given by 
+                              p_cutoff = sqrt(cutoff_factor * 2*m*k_B*T). Defaults to 100.
+        """
         # Since we are at low temperature, we don't want to integrate over the entire momentum space, but only over low p 
         # as the FD distribution goes to zero very quickly for large p. Thus we set a cutoff at 
         # p_cutoff = sqrt(cutoff_factor * 2*m*k_B*T) which corresponds to an energy scale of 
@@ -319,7 +453,8 @@ class FermiGas:
 
     def _calculate_n_with_E_functional_minimization(
             self,
-        ):
+        ) -> None:
+        """Calculate the density `n_array` by minimizing the energy functional E[n(r)] = Ekin[n(r)] + Epot[n(r)] w.r.t. n(r)."""
         assert self.n_array.unit == 1/u.um**3, "n_array must be in units of 1/um**3."
 
         # Calculate n(r) by minimizing the energy functional E[n(r)] = Ekin[n(r)] + Epot[n(r)] w.r.t. n(r)
@@ -448,12 +583,15 @@ class FermiGas:
             start: int = 0,
             end: int = -1,
             **kwargs,
-        ):
+        ) -> Figure:
         """Plot the convergence history of the iterative procedure carried out in `eval_density()`.
 
            Args:
                 start: start index of the convergence history list to be plotted. Defaults to 0.
                 end: end index of the convergence history list to be plotted. Defaults to -1, i.e. last index.
+
+           Returns:
+                fig: matplotlib figure object.
         """
         if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_array) > 0:
             title = kwargs.get('title', 'Convergence history, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))  
@@ -478,7 +616,7 @@ class FermiGas:
             if filename != None:
                 fig.savefig(filename, dpi=300, bbox_inches='tight')
 
-            return axs
+            return fig
         
         else:
             print("No convergence history found. Please run eval_density() first.")
@@ -488,8 +626,15 @@ class FermiGas:
             self, 
             num_points: int = 200,
             **kwargs,
-        ):
-        """Plot the spatial density n(x,0,0), n(0,y,0) and n(0,0,z) along each direction respectively."""
+        ) -> Figure:
+        """Plot the spatial density n(x,0,0), n(0,y,0) and n(0,0,z) along each direction respectively.
+        
+           Args:
+                num_points: number of points for the 1d density plots. Defaults to 200.
+                
+           Returns:
+                fig: matplotlib figure object.
+        """
         if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_array) > 0:
             title = kwargs.get('title', 'spatial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))  
             filename = kwargs.get('filename', None) 
@@ -543,7 +688,7 @@ class FermiGas:
             if filename != None:
                 fig.savefig(filename, dpi=300, bbox_inches='tight')
 
-            return axs
+            return fig
         
         else:
             print("No convergence history found. Please run eval_density() first.")
@@ -553,8 +698,15 @@ class FermiGas:
             self, 
             num_points: int = 200,
             **kwargs
-        ):
-        """Plot the spatial density n(x,y,0), n(x,0,z) and n(0,y,z) along two directions respectively."""
+        ) -> Figure:
+        """Plot the spatial density n(x,y,0), n(x,0,z) and n(0,y,z) along two directions respectively.
+        
+           Args:
+                num_points: number of points for the 2d density plots. Defaults to 200.
+
+           Returns:
+                fig: matplotlib figure object.
+        """
         if (self.particle_props.T.value < 1e-3 and self.N_particles is not None) or np.linalg.norm(self.n_array) > 0:
             title = kwargs.get('title', 'Spatial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))
             filename = kwargs.get('filename', None)
@@ -612,16 +764,16 @@ class FermiGas:
             if filename is not None:
                 fig.savefig(filename, dpi=300, bbox_inches='tight')
 
-            return axs
+            return fig
 
         else:
             print("No convergence history found. Please run eval_density() first.")
 
 
-
     def plot_all(
             self,
-    ):
+    ) -> None:
+        """Plot convergence history and density in 2d as well as 1d."""
         a = self.plot_convergence_history()
         b = self.plot_density_1d()
         c = self.plot_density_2d()
@@ -630,7 +782,15 @@ class FermiGas:
     def _check_n(
             self,
             n: Union[np.ndarray, Quantity],
-    ):
+    ) -> np.ndarray:
+        """Check if the density `n` is in units of 1/um**3 and convert to unitless if so.
+        
+           Args:
+                n: density to be checked
+
+           Returns:
+                n: density in unitless form
+        """
         if isinstance(n, Quantity):
             if n.unit.is_equivalent(1/u.um**3):
                 n = n.to(1/u.um**3).value
@@ -642,7 +802,12 @@ class FermiGas:
     def _check_and_process_input(
             self,
             which_method: str,
-    ):
+    ) -> None:
+        """Check and process the input arguments of specified methods.
+        
+           Args:    
+                which_method: name of the method to check and process input arguments for.
+        """
         if which_method == "init":
             # Initialize particle properties
             if isinstance(self.particle_props, ParticleProps):

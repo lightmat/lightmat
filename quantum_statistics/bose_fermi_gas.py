@@ -23,11 +23,25 @@ class BoseFermiGas:
             a_bf: Union[float, Quantity],
             spatial_basis_set: Union[SpatialBasisSet, str] = 'grid',
             init_with_zero_T: bool = True,
+            zero_T_threshold: float = 0.01,
             **basis_set_kwargs,
     ):
+        """Initialize BoseFermiGas class. 
+        
+           Args:
+               bose_props: Instance of ParticleProps class with species='boson'.
+               fermi_props: Instance of ParticleProps class with species='fermion'.
+               a_bf: s-wave scattering length between bosons and fermions. Can be a float or a Quantity with units of length.
+               spatial_basis_set: Instance of SpatialBasisSet class or string, right now only 'grid' is supported. Defaults to 'grid'.
+               init_with_zero_T: If True, run a zero-temperature calculation to improve initial guess for `mu`.
+               zero_T_threshold: If the temperature is below this threshold, we assume T=0. Defaults to 0.01nK.
+               **basis_set_kwargs: Keyword arguments for the SpatialBasisSet class.
+        """
         self.bose_props = bose_props
         self.fermi_props = fermi_props
         self.a_bf = a_bf
+        self.init_with_zero_T = init_with_zero_T
+        self.zero_T_threshold = zero_T_threshold
         self.spatial_basis_set = spatial_basis_set
         self.basis_set_kwargs = basis_set_kwargs
         self._check_and_process_input("init")
@@ -40,23 +54,16 @@ class BoseFermiGas:
 
     def eval_density(
             self,
-            bosons_use_TF: bool = True,
-            bosons_use_HF: bool = True,
-            fermions_use_TF_or_LDA: bool = True,
-            max_iter: int = 1000,
-            mu_convergence_threshold: float = 1e-5,
-            N_convergence_threshold: float = 1e-3,
-            mu_change_rate: float = 0.01,
-            mu_change_rate_adjustment: int = 5,
-            num_q_values: int = 50,
-            cutoff_factor: float = 10,
+            bosegas_kwargs_dict: dict = {},
+            fermigas_kwargs_dict: dict = {},
+            max_iter: int = 100,
             print_convergence_info_at_this_iteration: int = 0,
             show_progress: bool = True,
         ):
         # Approximations
-        self.bose_gas.use_TF = bosons_use_TF
-        self.bose_gas.use_HF = bosons_use_HF
-        self.fermi_gas.use_TF_or_LDA = fermions_use_TF_or_LDA
+        self.bose_gas.use_TF = True if 'use_TF' not in bosegas_kwargs_dict.keys() else bosegas_kwargs_dict['use_TF']
+        self.bose_gas.use_HF = True if 'use_HF' not in bosegas_kwargs_dict.keys() else bosegas_kwargs_dict['use_HF']
+        self.fermi_gas.use_TF_or_LDA = True if 'use_TF_or_LDA' not in fermigas_kwargs_dict.keys() else fermigas_kwargs_dict['use_TF_or_LDA']
 
         # Set up convergence history list for the plot_convergence_history() method
         self.bose_gas.convergence_history_mu = [self.bose_gas.mu.value]
@@ -71,85 +78,6 @@ class BoseFermiGas:
 
             
 
-
-
-    def _update_boson_density(
-            self,
-            num_q_values: int,
-            cutoff_factor: float,
-            mu_change_rate: float,
-    ):
-       # Update condensed density n0
-            if self.bose_gas.use_TF or init_with_TF:
-                self._update_n0_with_TF_approximation()  
-            else:
-                if self.particle_props.T.value <= self.zero_T_threshold: # Energy functional minimization is only implemented for T=0
-                    self._calculate_n0_with_E_functional_minimization()
-                else:
-                    raise NotImplementedError("Energy functional minimization is only implemented for T=0. RDMFT is not implemented yet.")
-            
-            # Update non-condensed density n_ex if T>0 (otherwise we have n_ex=0)
-            if self.particle_props.T.value > self.zero_T_threshold:
-                self._update_n_ex(num_q_values, cutoff_factor) # This uses either the semiclassical HF or Popov approximation
-                                                               # depending on the self.use_HF flag.
-            
-            # Update the total density n = n0 + nex
-            self.n_array = self.n0_array + self.n_ex_array
-
-            # Update the particle numbers
-            self.N_particles = self.spatial_basis_set.integral(self.n_array)
-            self.N_particles_condensed = self.spatial_basis_set.integral(self.n0_array)
-            self.N_particles_thermal = self.spatial_basis_set.integral(self.n_ex_array)
-            self.condensate_fraction = self.N_particles_condensed / self.N_particles
-
-            # Do soft update of the chemical potential mu based on normalization condition int dV (n0 + nex) = N_particles.
-            # This increases mu, if N_particles is too small w.r.t N_particles_target and decreases mu if N_particles is
-            # too large w.r.t. N_particles_target.
-            new_mu_direction = (self.particle_props.N_particles - self.N_particles) / self.particle_props.N_particles * u.nK 
-            self.mu += self.mu_change_rate * new_mu_direction
-
-            # Calculate convergence info
-            delta_mu_value = np.abs(self.mu.value - self.convergence_history_mu[-1]) 
-            self.convergence_history_mu.append(self.mu.value)
-            self.convergence_history_N.append(self.N_particles)
-
-            # Print convergence info every other iteration
-            if print_convergence_info_at_this_iteration > 0:
-                if iteration % print_convergence_info_at_this_iteration == 0:
-                    print(f"Iteration {iteration}:")
-                    print('N: ', self.N_particles)
-                    print('N_condensed: ', self.N_particles_condensed)
-                    print('N_thermal: ', self.N_particles_thermal)
-                    print('mu: ', self.mu)
-                    print('delta_mu: ', delta_mu_value)
-                    print('new_mu_direction: ', new_mu_direction)
-                    print('mu_change_rate: ', self.mu_change_rate)
-                    print("\n")
-
-            # Dynamically adjust `mu_change_rate` based on recent changes
-            if iteration % mu_change_rate_adjustment == 0 and iteration > 4:
-                # Check for oscillations in mu
-                oscillating = False
-                for i in range(1, 5): # Check if mu was oscillating over last 4 iterations
-                    if  (self.convergence_history_mu[-i] - self.convergence_history_mu[-i-1]) * \
-                        (self.convergence_history_mu[-i-1] - self.convergence_history_mu[-i-2]) < 0:
-                        oscillating = True
-                        break
-                if oscillating: # If oscillating, decrease the change rate to stabilize
-                    self.mu_change_rate *= 0.5 
-                else: # If not oscillating, increase the change rate to speed up convergence
-                    self.mu_change_rate *= 2 
-
-            # Check convergence criterion
-            if delta_mu_value < mu_convergence_threshold*np.abs(self.mu.value) and \
-               np.abs(self.particle_props.N_particles-self.N_particles) < N_convergence_threshold*self.particle_props.N_particles:
-                if init_with_TF and not self.use_TF:
-                    init_with_TF = False # set to False to continue with energy functional minimization
-                    print("Initialization done. Now using energy functional minimization.")
-                    continue
-                if show_progress:
-                    print(f"Convergence reached after {iteration} iterations.")
-                break
 
 
 

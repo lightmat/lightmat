@@ -168,9 +168,15 @@ def ring_beam_trap(
         seed: int = 42
 ):
     # Ensure X, Y, Z are numpy arrays
-    X = np.asarray(X, dtype=np.float64)
-    Y = np.asarray(Y, dtype=np.float64)
-    Z = np.asarray(Z, dtype=np.float64)
+    if isinstance(X, Quantity) and X.unit.is_equivalent(u.um):
+        X = X.to(u.um).value
+    if isinstance(Y, Quantity) and Y.unit.is_equivalent(u.um):
+        Y = Y.to(u.um).value
+    if isinstance(Z, Quantity) and Z.unit.is_equivalent(u.um):
+        Z = Z.to(u.um).value
+    X = np.atleast_1d(X)
+    Y = np.atleast_1d(Y)
+    Z = np.atleast_1d(Z)
     
     # Calculate radial distance from the center (0, 0) for each point
     R = np.sqrt(X**2 + Y**2)
