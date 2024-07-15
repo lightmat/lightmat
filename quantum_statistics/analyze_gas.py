@@ -157,15 +157,20 @@ def ring_beam_trap(
         X: Union[float, np.ndarray],
         Y: Union[float, np.ndarray],
         Z: Union[float, np.ndarray],
-        ring_radius: float = 40.0,
+        ring_radius: float = 60.0,
         waist_xy: float = 6.0,
-        waist_z: float = 13.0,
-        flat_z: float = 5.0,
-        blue_trap_height: float = 300.0,
-        red_trap_depth: float = 100.0,
-        inhomogeneity: float = 0.01,
+        waist_z: float = 14.0,
+        flat_z: float = 68.0,
+        blue_trap_height: float = 38*0.65,  #300.0, # 38 mW * 0.65 ring
+        red_trap_depth: float = 190*0.07, #100.0, # 190 mW * 0.07 paint
+        inhom_ring: float = 0.003,
+        inhom_paint: float = 0.0008,
         central_height: float = 100.0,
-        seed: int = 42
+        seed: int = 42,     # T_sodium = 
+                            # T_potassium = 100nK
+                            # N
+        
+        #group meeting slide 043024
 ):
     # Ensure X, Y, Z are numpy arrays
     if isinstance(X, Quantity) and X.unit.is_equivalent(u.um):
@@ -191,17 +196,19 @@ def ring_beam_trap(
     Vz = -red_trap_depth * gaussian_edges_z / gaussian_edges_z.max()
     Vz[np.abs(Z) <= flat_z / 2] = -red_trap_depth
 
+    # Add noise
+    np.random.seed(seed)
+    noise_ring = np.random.uniform(-1, 1, Vxy.shape) * inhom_ring * Vxy
+    Vxy = Vxy + noise_ring
+    noise_paint = np.random.uniform(-1, 1, Vz.shape) * inhom_paint * Vz
+    Vz = Vz + noise_paint
+
     # Combine the XY and Z potentials
     V_trap = Vxy + Vz
 
-    central_waist = 5
-    central_gaussian = np.exp(-2 * (R**2 + Z**2) / central_waist**2)
-    V_trap += central_height * central_gaussian / np.max(central_gaussian)
-
-    # Add noise
-    np.random.seed(seed)
-    noise = np.random.uniform(-1, 1, V_trap.shape) * inhomogeneity * (blue_trap_height + red_trap_depth) / 2
-    V_trap += noise
+    #central_waist = 5
+    #central_gaussian = np.exp(-2 * (R**2 + Z**2) / central_waist**2)
+    #V_trap += central_height * central_gaussian / np.max(central_gaussian)
 
     return V_trap
 

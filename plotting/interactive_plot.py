@@ -102,7 +102,7 @@ def interactive_plot(data, x, y, z, title=None, cbar_title=None):
                 plot = ax.plot(x.value, data_array.value[:,index1,index2].T) if plane =='x' \
                        else ax.plot(y.value, data_array.value[index1,:,index2].T) if plane == 'y' \
                        else ax.plot(z.value, data_array.value[index1,index2,:].T)
-                ax.set_xlabel(f'{plane} [um]', fontsize=14)
+                ax.set_xlabel(f'{plane} [μm]', fontsize=14)
                 ax.set_ylabel(cbar_title, fontsize=14)
                 ax.grid(True)
                 if title:
@@ -116,8 +116,8 @@ def interactive_plot(data, x, y, z, title=None, cbar_title=None):
                     Z = data_array.value[:,:,index1].T if plane == 'xy' else (data_array.value[:,index1,:].T if plane == 'xz' else data_array.value[index1,:,:].T)
                     surf = ax.plot_surface(X, Y, Z, cmap='viridis')
                     fig.colorbar(surf, ax=ax, shrink=0.75,).ax.set_title(cbar_title, fontsize=14, pad=10)
-                    ax.set_xlabel(f'{plane[0]} [um]', fontsize=14)
-                    ax.set_ylabel(f'{plane[1]} [um]', fontsize=14)
+                    ax.set_xlabel(f'{plane[0]} [μm]', fontsize=14)
+                    ax.set_ylabel(f'{plane[1]} [μm]', fontsize=14)
                     if title:
                         ax.set_title(title[i] if not isinstance(title, str) else title, fontsize=20)
             elif plot_type == 'pcolormesh':
@@ -132,8 +132,8 @@ def interactive_plot(data, x, y, z, title=None, cbar_title=None):
                     mesh = ax.pcolormesh(x.value, y.value, data_array.value[:,:,index1].T, shading='auto') if plane == 'xy' \
                         else ax.pcolormesh(x.value, z.value, data_array.value[:,index1,:].T, shading='auto') if plane == 'xz' \
                         else ax.pcolormesh(y.value, z.value, data_array.value[index1,:,:].T, shading='auto')
-                    ax.set_xlabel(f'{plane[0]} [um]', fontsize=14)
-                    ax.set_ylabel(f'{plane[1]} [um]', fontsize=14)
+                    ax.set_xlabel(f'{plane[0]} [μm]', fontsize=14)
+                    ax.set_ylabel(f'{plane[1]} [μm]', fontsize=14)
                     if title:
                         ax.set_title(title[i] if not isinstance(title, str) else title, fontsize=20)
                     fig.colorbar(mesh, ax=ax).ax.set_title(cbar_title, fontsize=14, pad=10)
