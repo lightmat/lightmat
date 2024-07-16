@@ -7,7 +7,7 @@ from typing import Union, Tuple
 from collections.abc import Sequence
 
 from .laser import Laser
-from .gaussianbeam import GaussianBeam
+from .beams import GaussianBeam
 
 
 class Lattice1d(Laser):
@@ -16,107 +16,78 @@ class Lattice1d(Laser):
             self,
             lattice_direction_vec: Sequence[float],
             intersect_angle: float,
-            pol_Jones_vec: Sequence[float],
             lambda_: Union[u.Quantity, float],
             w0: Union[u.Quantity, float, Sequence[float], np.ndarray],
             P: Union[u.Quantity, float],
+            pol_Jones_vec: Union[str, Sequence[float]] = 'linear horizontal',
             z0: Union[u.Quantity, float] = 0 * u.um,
             name: str = 'Lattice1d',
-            color: str = None,
     ) -> None:
-        """Initializes a Lattice1d instance.
+        """Initializes a Lattice1d Laser instance. It hosts two beams interfering with each other to form a 1d lattice.
         
            Args:
-                beam_direction_vec: 3d vector specifying the beam propagation in the global standard Carteesian 
-                                    coordinate system.
+                lattice_direction_vec: 3d vector specifying the 1d lattice direction in the global standard Carteesian 
+                                       coordinate system.
                 intersect_angle: Angle in [deg] between the two counterpropagating beams making up the lattice.
-                pol_Jones_vec: 2d vector specifying the polarization of the beam in the local coordinate system
-                               where the beam propagates along the local z-direction. The convention is that the
-                               horizontal polarization is along the local x-direction and the vertical polarization
-                               along the local y-direction.
-                lambda_: Wavelength of the beam in [nm]. 
-                w0: Beam waist diameter in [um]. Either a scalar for circular beams or a sequence of two floats for
-                    elliptical beams having different beam waist diameters in local x- and y-direction.
-                P: Power of the beam in [W].
-                z0: Position of the beam waist in [um] along the beam propagation direction. Defaults to 0um.
+                lambda_: Wavelength of the beams in [nm]. Can either be a scalar or 2d vector specifying different wavelengths
+                         for the two counterpropagating beams.
+                w0: Beam waist diameter in [um]. Either a scalar for the same circular beam waist for both beams or a 2d vector
+                    for the same elliptical beam waist for both beams, or a list of two 2d vectors for different beam waists
+                    for the two lattice beams.
+                P: Power of the beam in [W]. Either a scalar for the same power in both beams or a 2d vector for different power
+                   in the two lattice beams.
+                pol_Jones_vec: 2d vector specifying the polarization of the beam in the local x-y plane. The convention of
+                               is that the horizontal polarization is along the local x-direction and the vertical polarization
+                               along the local y-direction. Either a 2d vector for the same polarization for both beams or a list
+                               of two 2d vectors for different polarizations for the two lattice beams. Alternatively to the 2d
+                               vector, a string in ['linear horizontal', 'linear vertical', 'circular right', 'circular left'] 
+                               can be passed to specify the polarization. Defaults to 'linear horizontal'.
+                z0: Position of the beam waist in [um] along the beam propagation direction. either a scalar for same beam waist
+                    position for both beams or a 2d vector for different beam waist positions for the two lattice beams.
+                    Defaults to 0um.
+                name: Name of the Lattice1d instance. Defaults to 'Lattice1d'.
 
            Returns:
                 None           
         """
         self.lattice_direction_vec = lattice_direction_vec
         self.intersect_angle = intersect_angle
-        self.pol_Jones_vec = pol_Jones_vec
         self.lambda_ = lambda_
         self.w0 = w0
         self.P = P
+        self.pol_Jones_vec = pol_Jones_vec
         self.z0 = z0
         self.name = name
-        self.color = color
         self._check_input('init')
 
         # Calculate the beam directions
         self.beam_direction_forward_vec, self.beam_direction_backward_vec = self._calculate_beam_directions()
 
-        super().__init__(
-            self.name,
-            [self.beam_direction_forward_vec, self.beam_direction_backward_vec], 
-            self.lambda_, 
-            self.P,
-            self.color,
-        )
-
         # Create the two GaussianBeam instances for the two counterpropagating lattice beams
         self.beam_forward = GaussianBeam(
             beam_direction_vec=self.beam_direction_forward_vec,
-            pol_Jones_vec=self.pol_Jones_vec,
-            lambda_=self.lambda_,
-            w0=self.w0,
-            P=self.P,
-            z0=self.z0,
+            pol_Jones_vec=self.pol_Jones_vec if self.pol_Jones_vec.ndim == 1 and not isinstance(self.pol_Jones_vec[0], str) else self.pol_Jones_vec[0],
+            lambda_=self.lambda_ if self.lambda_.isscalar else self.lambda_[0],
+            w0=self.w0 if self.w0.ndim == 1 or self.w0.isscalar else self.w0[0],
+            P=self.P if self.P.isscalar else self.P[0],
+            z0=self.z0 if self.z0.isscalar else self.z0[0],
         )
 
         self.beam_backward = GaussianBeam(
             beam_direction_vec=self.beam_direction_backward_vec,
-            pol_Jones_vec=self.pol_Jones_vec,
-            lambda_=self.lambda_,
-            w0=self.w0,
-            P=self.P,
-            z0=self.z0,
+            pol_Jones_vec=self.pol_Jones_vec if self.pol_Jones_vec.ndim == 1 and not isinstance(self.pol_Jones_vec[1], str) else self.pol_Jones_vec[1],
+            lambda_=self.lambda_ if self.lambda_.isscalar else self.lambda_[1],
+            w0=self.w0 if self.w0.ndim == 1 or self.w0.isscalar else self.w0[1],
+            P=self.P if self.P.isscalar else self.P[1],
+            z0=self.z0 if self.z0.isscalar else self.z0[1],
+        )
+
+        super().__init__(
+            name = self.name,
+            beams = [self.beam_forward, self.beam_backward], 
         )
 
 
-
-
-    def E_vec_sym(
-            self,
-            x: sp.Symbol,
-            y: sp.Symbol,
-            z: sp.Symbol,
-    ):
-        E_forward = self.beam_forward.E_vec_sym(x, y, z)
-        E_backward = self.beam_backward.E_vec_sym(x, y, z)
-        return E_forward + E_backward
-    
-
-    def E_sym(
-            self,
-            x: sp.Symbol,
-            y: sp.Symbol,
-            z: sp.Symbol,
-    ):
-        return self.E_vec_sym(x, y, z).norm()
-        
-
-    def I_sym(
-            self,
-            x: sp.Symbol,
-            y: sp.Symbol,
-            z: sp.Symbol,
-    ):
-        E = self.E_sym(x, y, z)
-        I = (c.to(u.m/u.s).value*eps0.value/2 * abs(E)**2)
-
-        return I
     
 
     def E_vec(
@@ -180,6 +151,38 @@ class Lattice1d(Laser):
     
 
 
+    def E_vec_sym(
+            self,
+            x: sp.Symbol,
+            y: sp.Symbol,
+            z: sp.Symbol,
+    ):
+        E_forward = self.beam_forward.E_vec_sym(x, y, z)
+        E_backward = self.beam_backward.E_vec_sym(x, y, z)
+        return E_forward + E_backward
+    
+
+    def E_sym(
+            self,
+            x: sp.Symbol,
+            y: sp.Symbol,
+            z: sp.Symbol,
+    ):
+        return self.E_vec_sym(x, y, z).norm()
+        
+
+    def I_sym(
+            self,
+            x: sp.Symbol,
+            y: sp.Symbol,
+            z: sp.Symbol,
+    ):
+        E = self.E_sym(x, y, z)
+        I = (c.to(u.m/u.s).value*eps0.value/2 * abs(E)**2)
+
+        return I
+    
+
 
     def _calculate_beam_directions(
             self,
@@ -233,65 +236,91 @@ class Lattice1d(Laser):
             if not isinstance(self.intersect_angle, (float, int)):
                 raise TypeError('The intersect_angle must be a float.')
             if self.intersect_angle > 180 or self.intersect_angle < 0:
-                raise ValueError('The intersect_angle must be in the range [0, 180].')
-
-            # Check polarization Jones vector
-            if not isinstance(self.pol_Jones_vec, (Sequence, np.ndarray)):
-                raise TypeError('The pol_Jones_vec must be a sequence.')
-            if not len(self.pol_Jones_vec) == 2:
-                raise ValueError('The pol_Jones_vec must be a 2d vector.')
-            self.pol_Jones_vec = np.asarray(self.pol_Jones_vec)
-            self.pol_Jones_vec = self.pol_Jones_vec / np.linalg.norm(self.pol_Jones_vec)  # Normalize
+                raise ValueError('The intersect_angle must be in the range [0°, 180°].')
 
             # Check wavelength
-            if isinstance(self.lambda_, (float, int)):
+            if isinstance(self.lambda_, u.Quantity):
+                if not self.lambda_.unit.is_equivalent(u.nm):
+                    raise ValueError('The wavelength must be in units equivalent to nm.')
+            elif isinstance(self.lambda_, (float, int)):
                 self.lambda_ = self.lambda_ * u.nm
-            elif isinstance(self.lambda_, u.Quantity) and self.lambda_.unit.is_equivalent(u.nm):
-                if np.isscalar(self.lambda_.value):
-                    self.lambda_ = self.lambda_.to(u.nm)
-                else:
-                    raise TypeError('The wavelength lambda_ must be an astropy.Quantity or float.')
-            else:
-                raise TypeError('The wavelength lambda_ must be an astropy.Quantity or float.')
+            elif isinstance(self.lambda_, (Sequence, np.ndarray)):
+                if len(self.lambda_) != 2:
+                    raise ValueError('The wavelength must be a scalar or a 2d vector.')
+                self.lambda_ = np.asarray(self.lambda_) * u.nm
 
             
             # Check beam waist diameter
-            if isinstance(self.w0, (float, int)):
+            if isinstance(self.w0, u.Quantity):
+                if not self.w0.unit.is_equivalent(u.um):
+                    raise ValueError('The beam waist diameter must be in units equivalent to um.')
+            elif isinstance(self.w0, (float, int)):
                 self.w0 = self.w0 * u.um
-            elif isinstance(self.w0, (Sequence, np.ndarray)) and not isinstance(self.w0, u.Quantity) and len(self.w0) == 2:
-                self.w0 = np.asarray(self.w0) * u.um
-            elif isinstance(self.w0, u.Quantity) and self.w0.unit.is_equivalent(u.um):
-                if np.isscalar(self.w0.value):
-                    self.w0 = self.w0.to(u.um)
-                elif len(self.w0.value) == 2:
-                    self.w0 = self.w0.to(u.um)
+            elif isinstance(self.w0, (Sequence, np.ndarray)):
+                self.w0 = np.asarray(self.w0)
+                if self.w0.ndim == 1:
+                    if len(self.w0) != 2:
+                        raise ValueError('The beam waist diameter must be a scalar or a 2d vector or a list of two 2d vectors.')
+                elif self.w0.ndim == 2:
+                    if len(self.w0) != 2 or len(self.w0[0]) != 2 or len(self.w0[1]) != 2:
+                        raise ValueError('The beam waist diameter must be a scalar or a 2d vector or a list of two 2d vectors.')
                 else:
-                    raise ValueError('The beam waist diameter w0 must be a scalar or sequence of two floats.')
-            else:
-                raise TypeError('The beam waist diameter w0 must be an astropy.Quantity or float or sequence of floats.')
+                    raise ValueError('The beam waist diameter must be a scalar or a 2d vector or a list of two 2d vectors.')
+                self.w0 = self.w0 * u.um
 
             
             # Check power
-            if isinstance(self.P, (float, int)):
+            if isinstance(self.P, u.Quantity):
+                if not self.P.unit.is_equivalent(u.W):
+                    raise ValueError('The power must be in units equivalent to W.')
+            elif isinstance(self.P, (float, int)):
                 self.P = self.P * u.W
-            elif isinstance(self.P, u.Quantity) and self.P.unit.is_equivalent(u.W):
-                if np.isscalar(self.P.value):
-                    self.P = self.P.to(u.W)
-                else:
-                    raise TypeError('The power P must be an astropy.Quantity or float.')
+            elif isinstance(self.P, (Sequence, np.ndarray)):
+                self.P = np.asarray(self.P)
+                if len(self.P) != 2:
+                    raise ValueError('The power must be a scalar or a 2d vector.')
+                self.P = self.P * u.W
             else:
-                raise TypeError('The power P must be an astropy.Quantity or float.')
+                raise ValueError('The power must be a scalar or a 2d vector.')
+            
+
+            # Check polarization Jones vector
+            if isinstance(self.pol_Jones_vec, str):
+                if self.pol_Jones_vec not in ['linear horizontal', 'linear vertical', 'circular right', 'circular left']:
+                    raise ValueError('The polarization Jones vector must be one of the following strings: ["linear horizontal", "linear vertical", "circular right", "circular left"].')
+            elif isinstance(self.pol_Jones_vec, (Sequence, np.ndarray)):
+                self.pol_Jones_vec = np.asarray(self.pol_Jones_vec)
+                if self.pol_Jones_vec.ndim == 1:
+                    if len(self.pol_Jones_vec) != 2:
+                        raise ValueError('The polarization Jones vector must be a 2d vector or a list of two 2d vectors.')
+                    
+                    if self.pol_Jones_vec[0] not in ['linear horizontal', 'linear vertical', 'circular right', 'circular left'] \
+                        or self.pol_Jones_vec[1] not in ['linear horizontal', 'linear vertical', 'circular right', 'circular left']:
+                        raise ValueError('If the polarization Jones vector is a list of two strings, the strings must be one of the following: \n' \
+                                         + '["linear horizontal", "linear vertical", "circular right", "circular left"].')
+                
+                elif self.pol_Jones_vec.ndim == 2:
+                    if len(self.pol_Jones_vec) != 2 or len(self.pol_Jones_vec[0]) != 2 or len(self.pol_Jones_vec[1]) != 2:
+                        raise ValueError('The polarization Jones vector must be a 2d vector or a list of two 2d vectors.')
+                else:
+                    raise ValueError('The polarization Jones vector must be a 2d vector or a list of two 2d vectors.')
+            else:
+                raise ValueError('The polarization Jones vector must be a 2d vector or string or a list of two 2d vectors or two strings.')
+            
             
             # Check position of the beam waist
-            if isinstance(self.z0, (float, int)):
+            if isinstance(self.z0, u.Quantity):
+                if not self.z0.unit.is_equivalent(u.um):
+                    raise ValueError('The position of the beam waist must be in units equivalent to um.')
+            elif isinstance(self.z0, (float, int)):
                 self.z0 = self.z0 * u.um
-            elif isinstance(self.z0, u.Quantity) and self.z0.unit.is_equivalent(u.um):
-                if np.isscalar(self.z0.value):
-                    self.z0 = self.z0.to(u.um)
-                else:
-                    raise TypeError('The position of the beam waist z0 must be an astropy.Quantity or float.')
+            elif isinstance(self.z0, (Sequence, np.ndarray)):
+                self.z0 = np.asarray(self.z0)
+                if len(self.z0) != 2:
+                    raise ValueError('The position of the beam waist must be a scalar or a 2d vector.')
+                self.z0 = self.z0 * u.um
             else:
-                raise TypeError('The position of the beam waist z0 must be an astropy.Quantity or float.')
+                raise ValueError('The position of the beam waist must be a scalar or a 2d vector.')
             
             # Check name
             if not isinstance(self.name, str):

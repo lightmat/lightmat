@@ -6,11 +6,11 @@ import sympy as sp
 from typing import Union
 from collections.abc import Sequence
 
-from .laser import Laser
+from .beam import Beam
 
 
 
-class GaussianBeam(Laser):
+class GaussianBeam(Beam):
     """
     A class representing a Gaussian laser beam.
     In the local coordinate system of this GaussianBeam instance, the beam propagates along the local
@@ -91,10 +91,10 @@ class GaussianBeam(Laser):
     def __init__(
             self,
             beam_direction_vec: Sequence[float],
-            pol_Jones_vec: Sequence[float],
             lambda_: Union[u.Quantity, float],
             w0: Union[u.Quantity, float, Sequence[float], np.ndarray],
             P: Union[u.Quantity, float],
+            pol_Jones_vec: Union[str, Sequence[float]] = 'linear horizontal',
             z0: Union[u.Quantity, float] = 0 * u.um,
             name: str = "GaussianBeam",
             color: str = None,
@@ -104,31 +104,31 @@ class GaussianBeam(Laser):
            Args:
                 beam_direction_vec: 3d vector specifying the beam propagation in the global standard Carteesian 
                                     coordinate system.
-                pol_Jones_vec: 2d vector specifying the polarization of the beam in the local coordinate system
-                               where the beam propagates along the local z-direction. The convention is that the
-                               horizontal polarization is along the local x-direction and the vertical polarization
-                               along the local y-direction.
                 lambda_: Wavelength of the beam in [nm]. 
                 w0: Beam waist diameter in [um]. Either a scalar for circular beams or a sequence of two floats for
                     elliptical beams having different beam waist diameters in local x- and y-direction.
                 P: Power of the beam in [W].
+                pol_Jones_vec: 2d vector specifying the polarization of the beam in the local coordinate system
+                               where the beam propagates along the local z-direction. The convention is that the
+                               horizontal polarization is along the local x-direction and the vertical polarization
+                               along the local y-direction. On can either directly specify the 2d vector or use the
+                               strings 'linear horizontal', 'linear vertical', 'circular right', 'circular left' to
+                               specify the polarization. Defaults to 'linear horizontal'.
                 z0: Position of the beam waist in [um] along the beam propagation direction. Defaults to 0um.
 
            Returns:
                 None           
         """
         # Define attributes and check input
-        self.beam_direction_vec = np.array(beam_direction_vec)
-        self.pol_Jones_vec = np.array(pol_Jones_vec)
+        self.beam_direction_vec = np.asarray(beam_direction_vec)
         self.lambda_ = lambda_
         self.w0 = w0 # either a scalar for circular beams or a vector of two floats for elliptical beams
         self.P = P
+        self.pol_Jones_vec = pol_Jones_vec
         self.z0 = z0
         self.name = name
         self.color = color
         self._check_input('init')
-
-        super().__init__(self.name, self.beam_direction_vec, self.lambda_, self.P, self.color)
 
         # Calculate derived attributes
         self.k = (2*np.pi / (self.lambda_)).to(1/u.um)
@@ -152,6 +152,14 @@ class GaussianBeam(Laser):
         assert np.isclose(self.beam_direction_vec @ self.pol_3d_vec, 0), "The beam direction and the 3d polarization vector must be perpendicular."
         assert np.isclose(self.beam_direction_vec @ self.k_vec.value, self.k.value), "The beam direction and the wave vector must be parallel."
         
+        super().__init__(
+            self.name, 
+            self.beam_direction_vec, 
+            self.lambda_, 
+            self.P, 
+            self.pol_Jones_vec,
+            self.pol_3d_vec,
+        )
 
 
     def w(
@@ -449,13 +457,6 @@ class GaussianBeam(Laser):
             self.beam_direction_vec = np.asarray(self.beam_direction_vec)
             self.beam_direction_vec = self.beam_direction_vec / np.linalg.norm(self.beam_direction_vec)  # Normalize
 
-            # Check polarization Jones vector
-            if not isinstance(self.pol_Jones_vec, (Sequence, np.ndarray)):
-                raise TypeError('The pol_Jones_vec must be a sequence.')
-            if not len(self.pol_Jones_vec) == 2:
-                raise ValueError('The pol_Jones_vec must be a 2d vector.')
-            self.pol_Jones_vec = np.asarray(self.pol_Jones_vec)
-            self.pol_Jones_vec = self.pol_Jones_vec / np.linalg.norm(self.pol_Jones_vec)  # Normalize
 
             # Check wavelength
             if isinstance(self.lambda_, (float, int)):
@@ -473,7 +474,11 @@ class GaussianBeam(Laser):
             if isinstance(self.w0, (float, int)):
                 self.w0 = self.w0 * u.um
             elif isinstance(self.w0, (Sequence, np.ndarray)) and not isinstance(self.w0, u.Quantity) and len(self.w0) == 2:
-                self.w0 = np.asarray(self.w0) * u.um
+                self.w0 = np.asarray(self.w0) 
+                if self.w0[0] == self.w0[1]:
+                    self.w0 = self.w0[0] * u.um
+                else:
+                    self.w0 = self.w0 * u.um
             elif isinstance(self.w0, u.Quantity) and self.w0.unit.is_equivalent(u.um):
                 if np.isscalar(self.w0.value):
                     self.w0 = self.w0.to(u.um)
@@ -495,7 +500,30 @@ class GaussianBeam(Laser):
                     raise TypeError('The power P must be an astropy.Quantity or float.')
             else:
                 raise TypeError('The power P must be an astropy.Quantity or float.')
+
+
+            # Check polarization Jones vector
+            if isinstance(self.pol_Jones_vec, (Sequence, np.ndarray)):
+                if isinstance(self.pol_Jones_vec, str):
+                    if self.pol_Jones_vec == 'linear horizontal':
+                        self.pol_Jones_vec = np.array([1, 0])
+                    elif self.pol_Jones_vec == 'linear vertical':
+                        self.pol_Jones_vec = np.array([0, 1])
+                    elif self.pol_Jones_vec == 'circular right':
+                        self.pol_Jones_vec = np.array([1, 1j]) / np.sqrt(2)
+                    elif self.pol_Jones_vec == 'circular left':
+                        self.pol_Jones_vec = np.array([1, -1j]) / np.sqrt(2)
+                    else:
+                        raise ValueError("If pol_Jones_vec is a string, it must be  in ['linear horizontal', 'linear vertical', 'circular right', 'circular left'].")
+                else:
+                    if not len(self.pol_Jones_vec) == 2:
+                        raise ValueError('The pol_Jones_vec must be a 2d vector.')
+                    self.pol_Jones_vec = np.asarray(self.pol_Jones_vec)
+                    self.pol_Jones_vec = self.pol_Jones_vec / np.linalg.norm(self.pol_Jones_vec)  # Normalize
+            else:
+                raise TypeError("The pol_Jones_vec must be a 2d vector or string in ['linear horizontal', 'linear vertical', 'circular right', 'circular left'].")
             
+
             # Check position of the beam waist
             if isinstance(self.z0, (float, int)):
                 self.z0 = self.z0 * u.um

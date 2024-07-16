@@ -1,11 +1,11 @@
-import os
 import astropy.units as u
 from astropy.constants import hbar, c, eps0, e, a0, h, hbar
 import numpy as np
 import pandas as pd
-import pywigxjpf as wig
+from sympy.physics.wigner import wigner_3j, wigner_6j
 from typing import Union
 from collections.abc import Sequence
+from typing import Union
 
 from .light import Laser
 from .matter import Atom
@@ -32,31 +32,34 @@ class Potential(object):
 
 
 
-
-    def _fs_polarizability(
+    def V(
             self,
-            K: int,
-            omega_laser: u.Quantity,
-    ) -> float:
-        """Calculate the scalar (K=0), vector (K=1) or tensor (K=2) polarizability of the 
-           atomic fine structure state.
+            x: Union[float, Sequence[float], np.ndarray, u.Quantity], 
+            y: Union[float, Sequence[float], np.ndarray, u.Quantity], 
+            z: Union[float, Sequence[float], np.ndarray, u.Quantity],
+    ) -> u.Quantity:
+        """Returns the potential of the `atom` in its hfs state given the light field of the `lasers` at the position (x,y,z) in [h x MHz]. 
+           Here, x, y, z are the global standard Carteesian coordinates in [um] and can be either float or array obtained from np.meshgrid().
+
+           Args:
+                x: Global standard Carteesian coordinate in [um].
+                y: Global standard Carteesian coordinate in [um].
+                z: Global standard Carteesian coordinate in [um].
+
+           Returns:
+                u.Quantity: Complex electric field amplitude of the beam at the position (x,y,z) in [V/m], can be either float or array.
         """
-        J = self.atom.hfs_state['J']
+        for laser in self.lasers:
+            # Calculate the electric field amplitude of the laser at the position (x,y,z)
+            E_squared = np.real(laser.E(x, y, z) * np.conj(laser.E(x, y, z))) # this is real anyways, just get rid of complex cast warnings
 
-        alpha = 0
-        for _, row in self.atom.fs_transition_data.iterrows():
-            J_prime = row['transition']['J']
-            reduced_dipole_element = row['reduced_dipole_element'] * e.si * a0
-            omega_transition = row['wavelength'] * u.MHz
-            gamma_transition = row['linewidth'] * u.MHz
+            # Calculate the polarizabilities of the atom in the hfs state for the laser frequency
+            alpha_s = self.atom.scalar_hfs_polarizability(laser.omega)
+            alpha_v = self.atom.vector_hfs_polarizability(laser.omega)
+            alpha_t = self.atom.tensor_hfs_polarizability(laser.omega)
 
-
-            alpha += (-1)**(K+J+1+J_prime) * wig.wig6jj(1, K, 1, J, J_prime, J) * reduced_dipole_element**2 * \
-                     1/hbar * np.real(1/(omega_transition - omega_laser - 1j*gamma_transition/2) + \
-                                      (-1)**K/(omega_transition + omega_laser + 1j*gamma_transition/2))
-
-        return np.sqrt(2*K + 1) * alpha
-
+            # Calculate the coefficients, equation (20) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
+            C = 2 * np.imag(0)
 
 
 
@@ -73,6 +76,8 @@ class Potential(object):
             else:
                 if not isinstance(self.lasers, Laser):
                     raise TypeError("lasers must be a Laser or sequence of Lasers")
+                else:
+                    self.lasers = [self.lasers]
 
             # Check atom
             if not isinstance(self.atom, Atom):

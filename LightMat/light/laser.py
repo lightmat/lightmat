@@ -5,25 +5,26 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence
 
+from .beams import Beam
+
 class Laser(ABC):
     @abstractmethod
     def __init__(
         self,
         name: str,
-        beam_directions: Union[Sequence[float], np.ndarray],
-        lambda_: Union[u.Quantity, float],
-        P: Union[u.Quantity, float],
-        color: str = None,
+        beams: Sequence[Beam],
     ) -> None:
         """
-        Initializes the laser.
+        Initializes the laser. A laser can have several beams. The beams interfere with each other to 
+        generate the total electric field of the laser.
+
+        Args:
+            name: Name of the laser.
+            beams: Sequence of beams in the laser.
+            color: Color of the laser.
         """
         self.name = name
-        self.beam_directions = np.atleast_2d(beam_directions)
-        self.lambda_ = lambda_
-        self.P = P
-        self.k = (2*np.pi / (self.lambda_)).to(1/u.um)
-        self.color = color
+        self.beams = beams
     
 
     @abstractmethod
@@ -33,9 +34,9 @@ class Laser(ABC):
             y: Union[float, Sequence[float], np.ndarray, u.Quantity],
             z: Union[float, Sequence[float], np.ndarray, u.Quantity],
     ) -> u.Quantity:
-        """Returns the complex electric field vector of the beam at the position (x,y,z) in [V/m] in the standard Carteesian coordinate system.
-           This is just the complex electric field amplitude multiplied by the 3d polarization vector. Here, x, y, z are the global
-           standard Carteesian coordinates in [um] and can be either float or array obtained from np.meshgrid().
+        """Returns the total complex electric field vector of the laser at the position (x,y,z) in [V/m] in the standard Carteesian 
+           coordinate system. All ``beams`` of the laser interfere with each other. Here, x, y, z are the global standard Carteesian 
+           coordinates in [um] and can be either float or array obtained from np.meshgrid().
            
            Args:
                 x: Global standard Carteesian coordinate in [um].
@@ -43,7 +44,7 @@ class Laser(ABC):
                 z: Global standard Carteesian coordinate in [um].
                 
            Returns:
-                u.Quantity: Complex electric field vector of the beam at the position (x,y,z) in [V/m] in the standard Carteesian coordinate system.
+                u.Quantity: Complex electric field vector of the laser at the position (x,y,z) in [V/m] in the standard Carteesian coordinate system.
         """
         pass
 
@@ -55,8 +56,9 @@ class Laser(ABC):
             y: Union[float, Sequence[float], np.ndarray, u.Quantity], 
             z: Union[float, Sequence[float], np.ndarray, u.Quantity],
     ) -> u.Quantity:
-        """Returns the complex electric field amplitude of the laser at the position (x,y,z) in [V/m]. 
-           Here, x, y, z are the global standard Carteesian coordinates in [um] and can be either float or array obtained from np.meshgrid().
+        """Returns the complex electric field amplitude of the laser at the position (x,y,z) in [V/m]. All ``beams`` of the laser interfere 
+           with each other. Here, x, y, z are the global standard Carteesian coordinates in [um] and can be either float or array obtained 
+           from np.meshgrid().
 
            Args:
                 x: Global standard Carteesian coordinate in [um].
@@ -64,7 +66,7 @@ class Laser(ABC):
                 z: Global standard Carteesian coordinate in [um].
 
            Returns:
-                u.Quantity: Complex electric field amplitude of the beam at the position (x,y,z) in [V/m], can be either float or array.
+                u.Quantity: Complex electric field amplitude of the laser at the position (x,y,z) in [V/m], can be either float or array.
         """
         pass
 
@@ -75,8 +77,9 @@ class Laser(ABC):
             y: Union[float, Sequence[float], np.ndarray, u.Quantity],
             z: Union[float, Sequence[float], np.ndarray, u.Quantity],
     ) -> u.Quantity:    
-        """Returns the intensity of the laser at the position (x,y,z) in [mW/cm^2]. Here, x, y, z are the global standard Carteesian
-           coordinates in [um] and can be either float or array obtained from np.meshgrid().
+        """Returns the intensity of the laser at the position (x,y,z) in [mW/cm^2]. All ``beams`` of the laser interfere 
+           with each other. Here, x, y, z are the global standard Carteesian coordinates in [um] and can be either float 
+           or array obtained from np.meshgrid().
 
            Args:
                 x: Global standard Carteesian coordinate in [um].
@@ -84,6 +87,6 @@ class Laser(ABC):
                 z: Global standard Carteesian coordinate in [um].
 
            Returns:
-                u.Quantity: Intensity of the beam at the position (x,y,z) in [mW/cm^2], can be either float or array.
+                u.Quantity: Intensity of the laser at the position (x,y,z) in [mW/cm^2], can be either float or array.
         """
         pass

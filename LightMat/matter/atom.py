@@ -3,7 +3,8 @@ import astropy.units as u
 from astropy.constants import hbar, c, eps0, e, a0, h, hbar
 import numpy as np
 import pandas as pd
-import pywigxjpf as wig
+from sympy.physics.wigner import wigner_3j, wigner_6j
+from fractions import Fraction
 from typing import Union
 from collections.abc import Sequence
 
@@ -15,28 +16,157 @@ class Atom(object):
             self,
             name: str,
             hfs_state: Union[dict[str, Union[int, str, float]], Sequence[dict[str, Union[int, str, float]]]],
-            I: float,
             fs_transition_data: Union[pd.DataFrame, Sequence[pd.DataFrame]] = None,
     ) -> None:
         """Initialise the Atom object.
         
            Args:
                name: The name of the atom. If it is in the database, the transition data will be loaded automatically.
-               hfs_state: The hfs_state of the atom, should be dict of form {'n': int, 'L': str, 'J': float, 'F': int, 'mF': int} 
-                          for a hyperfine-structure state. It is also possible to provide a list of hfs_states. 
-               I: The nuclear spin of the atom. 
+               hfs_state: The hfs_state of the atom, should be dict of form 
+                          {'n': int, 'L': str, 'J': float, 'F': int, 'mF': int, 'I': int} 
+                          for a hyperfine-structure state. 
                fs_transition_data: Dataframe containing the transition data of the fines tructure state, should have columns 
                                    ['transition', 'wavelength', 'reduced_dipole_element', 'linewidth'], where transition is 
                                    a dict to a fs_state {'n': int, 'L': str, 'J': float}, wavelength is in [nm], reduced dipole
-                                   element is in atomic units [ea0] and linewidth is in [MHz]. If `hfs_state` is a list of states
-                                   then `transition_data` is a list of dataframes. Defaults to None.
+                                   element is in atomic units [e*a0] and linewidth is in [hbar x MHz]. Defaults to None.
         """
         self.name = name
         self.hfs_state = hfs_state
-        self.I = I
         self.fs_transition_data = fs_transition_data
         self._check_input('init')
 
+        self.fs_state = {'n': self.hfs_state['n'], 'L': self.hfs_state['L'], 'J': self.hfs_state['J']}
+        self.fs_transition_data_pretty = self._make_transition_data_pretty()
+
+        
+
+    def scalar_hfs_polarizability(
+            self,
+            omega_laser: Union[u.Quantity, float],
+    ) -> u.Quantity:
+        """Calculate the scalar polarizability of the provided hfs state of the atom (equation (18) in 
+           http://dx.doi.org/10.1140/epjd/e2013-30729-x).
+        
+           Args:
+               omega_laser: Laser frequency for which the the polarizability is to be calculated. If float, it
+                            is assumed to be in [hbar x THz], if u.Quantity, it must be in unit equivalent to [Hz].
+                       
+           Returns:
+               u.Quantity: The scalar polarizability of the atomic hfs state in [h x Hz / (V/m)^2].
+        """
+        self.omega_laser = omega_laser
+        self._check_input('polarizability')
+
+        J = self.hfs_state['J']
+            
+        # Calculate the scalar polarizability, see equation (18) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
+        alpha_s = 1 / (np.sqrt(3*(2*J+1))) * self._reduced_dynamical_polarizability(
+                                                                K=0, 
+                                                                omega_laser=self.omega_laser,
+                                                            )
+        return alpha_s # in [h x Hz / (V/m)^2]
+
+
+
+    def vector_hfs_polarizability(
+            self,
+            omega_laser: Union[u.Quantity, float],
+    ) -> u.Quantity:
+        """Calculate the vector polarizability of the provided hfs state of the atom (equation (18) in 
+           http://dx.doi.org/10.1140/epjd/e2013-30729-x).
+        
+           Args:
+               omega_laser: Laser frequency for which the the polarizability is to be calculated. If float, it
+                            is assumed to be in [hbar x THz], if u.Quantity, it must be in unit equivalent to [Hz].
+                       
+           Returns:
+               u.Quantity: The vector polarizability of the atomic hfs state in [h x Hz / (V/m)^2].
+        """
+        self.omega_laser = omega_laser
+        self._check_input('polarizability')
+        
+        J = self.hfs_state['J']
+        F = self.hfs_state['F']
+        I = self.hfs_state['I']
+
+        # Calculate the vector polarizability, see equation (18) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
+        wigner = float(wigner_6j(F, 1, F, J, I, J).evalf())
+        alpha_v = (-1)**(J*I*F) * np.sqrt(2*F*(2*F+1) / (F+1)) * wigner * self._reduced_dynamical_polarizability(
+                                                                K=1, 
+                                                                omega_laser=self.omega_laser,
+                                                            )
+        return alpha_v # in [h x Hz / (V/m)^2]
+
+
+
+    def tensor_hfs_polarizability(
+            self,
+            omega_laser: Union[u.Quantity, float],
+    ) -> u.Quantity:
+        """Calculate the tensor polarizability of the provided hfs state of the atom (equation (18) in 
+           http://dx.doi.org/10.1140/epjd/e2013-30729-x).
+        
+           Args:
+               omega_laser: Laser frequency for which the the polarizability is to be calculated. If float, it
+                            is assumed to be in [hbar x THz], if u.Quantity, it must be in unit equivalent to [Hz].
+                       
+           Returns:
+               u.Quantity: The tensor polarizability of the atomic hfs state in [h x Hz / (V/m)^2].
+        """
+        self.omega_laser = omega_laser
+        self._check_input('polarizability')
+
+        J = self.hfs_state['J']
+        F = self.hfs_state['F']
+        I = self.hfs_state['I']
+
+        # Calculate the tensor polarizability, see equation (18) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
+        wigner = float(wigner_6j(F, 2, F, J, I, J).evalf())
+        alpha_t = -(-1)**(J*I*F) * np.sqrt(2*F*(2*F-1)*(2*F+1) / (3*(F+1)*(2*F+3))) * wigner * self._reduced_dynamical_polarizability(
+                                                                K=2, 
+                                                                omega_laser=self.omega_laser,
+                                                            )
+        return alpha_t # in [h x Hz / (V/m)^2]
+    
+
+
+
+    def _reduced_dynamical_polarizability(
+            self,
+            K: int,
+            omega_laser: Union[u.Quantity, float],
+    ) -> u.Quantity:
+        """Calculate the scalar (K=0), vector (K=1) or tensor (K=2) reduced dynamical polarizability of the 
+           atomic fine structure state given by equation (11) in http://dx.doi.org/10.1140/epjd/e2013-30729-x.
+
+           Args:
+                K: Order of the polarizability. Must be 0, 1 or 2.
+                omega_laser: Laser frequency for which the the polarizability is to be calculated. If float, it
+                             is assumed to be in [hbar x THz], if u.Quantity, it must be in unit equivalent to [Hz].
+
+            Returns:
+                u.Quantity: The polarizability of the atomic fine structure state in [h x Hz / (V/m)^2].
+        """
+        self.K = K
+        self.omega_laser = omega_laser
+        self._check_input('polarizability_reduced')
+        
+        J = self.fs_state['J']
+
+        # Calculate the fs polarizability, see equation (11) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
+        alpha = 0
+        for _, row in self.fs_transition_data.iterrows():
+            J_prime = row['transition']['J']
+            reduced_dipole_element = row['reduced_dipole_element'] * e.si*a0
+            omega_transition = ((2*np.pi * c) / (row['wavelength']*u.nm)).to(u.MHz)
+            gamma_transition = row['linewidth'] * u.MHz
+            wigner = float(wigner_6j(1, self.K, 1, J, J_prime, J).evalf())
+
+            alpha += (-1)**(self.K+J+1+J_prime) * wigner * reduced_dipole_element**2 * 1/hbar *\
+                     np.real(1/(omega_transition - omega_laser - 1j*gamma_transition/2) + \
+                              (-1)**K/(omega_transition + omega_laser + 1j*gamma_transition/2))
+
+        return (np.sqrt(2*self.K + 1) * alpha / h).to(u.Hz / (u.V/u.m)**2) # in [h x Hz / (V/m)^2]
 
 
 
@@ -84,9 +214,20 @@ class Atom(object):
 
         # Create a new DataFrame with 'transitions' column
         filtered_df = df[df['initial'].apply(lambda x: x == fs_state) | df['final'].apply(lambda x: x == fs_state)]
-        transitions = filtered_df.apply(lambda row: row['initial'] if row['final'] == fs_state else row['final'], axis=1)
+        
+        transitions = []
+        adjusted_wavelengths = []
+        for index, row in filtered_df.iterrows():
+            if row['final'] == fs_state:
+                transitions.append(row['initial'])
+                adjusted_wavelengths.append(row['wavelength'])  # Positive if fs_state is 'final'
+            else:
+                transitions.append(row['final'])
+                adjusted_wavelengths.append(-row['wavelength'])  # Negative if fs_state is 'initial'
+
         fs_transitions_df = filtered_df.copy()
         fs_transitions_df['transition'] = transitions
+        fs_transitions_df['wavelength'] = adjusted_wavelengths  # Assign the adjusted wavelengths
         fs_transitions_df = fs_transitions_df.drop(columns=['initial', 'final'])
         fs_transitions_df = fs_transitions_df[['transition', 'wavelength', 'transition_rate']]
         fs_transitions_df.reset_index(drop=True, inplace=True)
@@ -95,11 +236,11 @@ class Atom(object):
         # Calculate the reduced dipole element 
         J_primes = np.asarray(fs_transitions_df['transition'].apply(lambda x: x['J']))
         wavelengths = np.asarray(fs_transitions_df['wavelength'].values) * u.nm
-        omegas = 2 * np.pi * c / wavelengths
+        omegas = 2 * np.pi * c / np.abs(wavelengths)
         transition_rates = np.asarray(fs_transitions_df['transition_rate'].values) * 1/u.s
 
         reduced_dipole_elements = np.sqrt(
-            (transition_rates * 3 * np.pi * eps0 * hbar * c**3 * (2 * J_primes + 1)) / (omegas**3)
+            (transition_rates * 3*np.pi * eps0 * hbar * c**3 * (2 * J_primes + 1)) / (omegas**3)
         ).to(u.C * u.m)
         reduced_dipole_elements_au = reduced_dipole_elements / (e.si * a0)
 
@@ -107,11 +248,11 @@ class Atom(object):
 
 
         # Calculate the transition linewidths
-        linewidth_fs_state = (df[df['initial'].apply(lambda x: x == fs_state)]['transition_rate'].sum() / (2*np.pi) * u.Hz).to(u.MHz).value
+        linewidth_fs_state = (df[df['initial'].apply(lambda x: x == fs_state)]['transition_rate'].sum() * u.Hz).to(u.MHz).value
 
         linewidths = []
         for state in fs_transitions_df['transition']:
-            linewidth_state = (df[df['initial'].apply(lambda x: x == state)]['transition_rate'].sum() / (2*np.pi) * u.Hz).to(u.MHz).value
+            linewidth_state = (df[df['initial'].apply(lambda x: x == state)]['transition_rate'].sum() * u.Hz).to(u.MHz).value
             linewidths.append(linewidth_state + linewidth_fs_state)
 
         fs_transitions_df['linewidth'] = linewidths
@@ -119,6 +260,35 @@ class Atom(object):
 
         # Save the transition data
         self.fs_transition_data = fs_transitions_df
+
+
+
+    def _make_transition_data_pretty(
+            self,
+    ) -> pd.DataFrame:
+        """Create a pretty version of the transition data dataframe.
+               
+            Returns:
+                pd.DataFrame: A pretty version of the transition data dataframe.
+        """            
+        fs_transition_data_pretty = self.fs_transition_data.copy().rename(columns={
+            'transition': 'Transition',
+            'wavelength': 'Wavelength [nm]',
+            'reduced_dipole_element': 'Reduced dipole element [e*a0]',
+            'linewidth': 'Linewidth [hbar x MHz]',
+        })
+
+        def transition_to_str(state):
+            fraction = Fraction(state['J']).limit_denominator()
+            fraction_str = f"{fraction.numerator}/{fraction.denominator}"
+            return str(state['n']) + state['L'] + fraction_str 
+
+        fs_transition_data_pretty['Transition'] = fs_transition_data_pretty['Transition'].apply(
+                                                      lambda x: transition_to_str(self.fs_state) + ' -> ' + transition_to_str(x)
+                                                  )
+        #fs_transition_data_pretty.set_caption("Fine structure transition data of " + transition_to_str(fs_state))
+
+        return fs_transition_data_pretty
 
 
 
@@ -145,14 +315,14 @@ class Atom(object):
                     print("WARNING: The name is not in the data base. The provided transition_data will be used.")
             else:
                 if self.fs_transition_data is not None:
-                    print("WARNING: The name is in the data base. The provided transition_data will be ignored.")
+                    print("WARNING: The name is in the data base. The provided transition_data will be ignored. Just change the name if you want to actually use the provided transition_data.")
                 self._load_transition_data_from_Savronova()
                 
 
             # Check hfs_state
             if isinstance(self.hfs_state, dict):
-                if not all(key in self.hfs_state for key in ['n', 'L', 'J', 'mF']):
-                    raise ValueError("hfs_state must be a dict of form {'n': int, 'L': str, 'J': float, 'F': float, 'mF': int}.")
+                if not all(key in self.hfs_state for key in ['n', 'L', 'J', 'mF', 'I']):
+                    raise ValueError("hfs_state must be a dict of form {'n': int, 'L': str, 'J': float, 'F': float, 'mF': int, 'I': int}.")
                 if not isinstance(self.hfs_state['n'], int):
                     raise TypeError("n must be an int.")
                 if not self.hfs_state['L'] in ['s', 'p', 'd', 'f', 'g', 'h', 'i']:
@@ -163,27 +333,26 @@ class Atom(object):
                     raise TypeError("F must be a float.")
                 if not isinstance(self.hfs_state['mF'], int):
                     raise TypeError("mF must be an int.")
-            elif isinstance(self.hfs_state, Sequence):
-                for hfs_state in self.hfs_state:
-                    if not isinstance(hfs_state, dict):
-                        raise TypeError("hfs_state must be a dict or list of dicts of form {'n': int, 'L': str, 'J': float, 'F': float, 'mF': int}.")
-                    if not all(key in hfs_state for key in ['n', 'L', 'J', 'mF']):
-                        raise ValueError("hfs_state must be a dict of form {'n': int, 'L': str, 'J': float, 'F': float, 'mF': int}.")
-                    if not isinstance(hfs_state['n'], int):
-                        raise TypeError("n must be an int.")
-                    if not hfs_state['L'] in ['s', 'p', 'd', 'f', 'g', 'h', 'i']:
-                        raise TypeError("L must be a str in ['s', 'p', 'd', 'f', 'g', 'h', 'i'].")
-                    if not isinstance(hfs_state['J'], float):
-                        raise TypeError("J must be a float.")
-                    if not isinstance(hfs_state['F'], float):
-                        raise TypeError("F must be a float.")
-                    if not isinstance(hfs_state['mF'], int):
-                        raise TypeError("mF must be an int.")
+                if not isinstance(self.hfs_state['I'], int):
+                    raise TypeError("I must be an int.")
             else:
-                raise TypeError("hfs_state must be a dict or list of dicts of form {'n': int, 'L': str, 'J': float, 'F': float, 'mF': int}.")
+                raise TypeError("hfs_state must be a dict of form {'n': int, 'L': str, 'J': float, 'F': float, 'mF': int, 'I': int}.")
             
-                    
-            # Check I
-            if not isinstance(self.I, int):
-                raise TypeError("I must be an int.")
+
+        if method == 'polarizability' or method == 'polarizability_reduced':
+            # Check omega_laser
+            if isinstance(self.omega_laser, u.Quantity):
+                if not self.omega_laser.unit.is_equivalent(u.Hz):
+                    raise ValueError("omega_laser must be in unit equivalent to [Hz].")
+            elif isinstance(self.omega_laser, float):
+                self.omega_laser = self.omega_laser * u.THz
+            else:
+                raise TypeError("omega_laser must be a float or u.Quantity.")
+            
+            # Check K
+            if method == 'polarizability_reduced':
+                if self.K not in [0, 1, 2]:
+                    raise ValueError("K must be 0, 1 or 2.")
+            
+
                 
