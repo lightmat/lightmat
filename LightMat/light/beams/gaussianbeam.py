@@ -212,14 +212,21 @@ class GaussianBeam(Beam):
         self.z_local = z_local
         self._check_input('R')
 
+        z_local = np.atleast_1d(self.z_local)
+
+        # Create mask to handle z0 differently from other z-positions to avoid division by zero (R(z0) = inf)
+        mask = ~(z_local == self.z0)
+
         # Calculate radius of wavefront curvature at given local z positions
         if np.isscalar(self.w0.value): # Circular beam
-            R = self.z_local + self.z_R**2 / (self.z_local - self.z0)
+            R = np.zeros_like(z_local.value) * u.um
+            R[mask] = (z_local[mask] - self.z0) + self.z_R**2 / (z_local[mask] - self.z0)
+            R[~mask] = np.inf * u.um
         else: # Elliptical beam
-            R = np.array([
-                (self.z_local + self.z_R[0]**2 / (self.z_local - self.z0)).to(self.z_local.unit),
-                (self.z_local + self.z_R[1]**2 / (self.z_local - self.z0)).to(self.z_local.unit),
-            ]) * self.z_local.unit
+            R = np.zeros((2, len(z_local))) * u.um
+            R[0, mask] = (z_local[mask] - self.z0) + self.z_R[0]**2 / (z_local[mask] - self.z0).to(self.z_local.unit)
+            R[1, mask] = (z_local[mask] - self.z0) + self.z_R[1]**2 / (z_local[mask] - self.z0).to(self.z_local.unit)
+            R[:, ~mask] = np.inf * u.um
 
         return R.to(u.um)
     
@@ -313,34 +320,6 @@ class GaussianBeam(Beam):
                                  - 1j * self.k * (x_local**2 / (2*Rz[0]) + y_local**2 / (2*Rz[1])) \
                                  + 1j * (Psiz[0]/2 + Psiz[1]/2) \
                                  - 1j * self.k * z_local)
-            
-
-        # Mask to handle calculation differently at the beam waist location z=z0 in order to avoid division by zero in the exponential
-        # due to zero wavefront curvature at the beam waist
-        # mask = ~np.isclose(z_local.value, self.z0.value)  
-        # E = np.zeros_like(x_local.value, dtype=complex) * self.E0.unit  # Initialize complex electric field amplitude, must have same shape as x_local, y_local 
-                                                                        # and z_local, which all have the same shape (as ensured in _check_input())
-
-        #if np.isscalar(self.w0.value): # Circular beam, see https://en.wikipedia.org/wiki/Gaussian_beam, but of course it is also the special case
-        #                               # of the elliptical beam defined below
-        #    # First at positions z != z0
-        #    E[mask] = self.E0 * self.w0 / wz[mask] * np.exp(-(x_local[mask]**2 + y_local[mask]**2) / wz[mask]**2 \
-        #                                                    - 1j * self.k * (x_local[mask]**2 + y_local[mask]**2) / (2*Rz[mask]) \
-        #                                                    + 1j * Psiz[mask] \
-        #                                                    - 1j * self.k * z_local[mask])
-        #    # Treat position z=z0 separately
-        #    E[~mask] = self.E0 * np.exp(-(x_local[~mask]**2 + y_local[~mask]**2) / wz[~mask]**2)
-#
-        #else: # Elliptical beam, see equations (62) in chap 16 with c00=E0*sqrt(wx0*wy0), (58) in chap. 16 with (5) in chap. 17 and (49) in chap. 16
-        #    # First at positions z != z0
-        #    E[mask] = self.E0 * np.sqrt(self.w0[0] / wz[0][mask]) * np.sqrt(self.w0[1] / wz[1][mask]) \
-        #              * np.exp(x_local[mask]**2 / wz[0][mask]**2 + y_local[mask]**2 / wz[1][mask]**2 \
-        #                       - 1j * self.k * (x_local[mask]**2 / (2*Rz[0][mask]) + y_local[mask]**2 / (2*Rz[1][mask])) \
-        #                       + 1j * (Psiz[0][mask]/2 + Psiz[1][mask]/2) \
-        #                       - 1j * self.k * z_local[mask]),
-        #    # Treat position z=z0 separately
-        #    E[~mask] = self.E0 * np.exp(x_local[~mask]**2 / wz[0][~mask]**2 + y_local[~mask]**2 / wz[1][~mask]**2)
-
 
         return np.squeeze(E).to(u.V/u.m) # if E is scalar, return E instead of np.array([E])
 
@@ -440,6 +419,163 @@ class GaussianBeam(Beam):
 
         return R
 
+
+
+    def w_sym(
+            self,
+            z_local: sp.Symbol,
+    ): 
+        w0 = self.w0.to(u.um).value
+        z0 = self.z0.to(u.um).value
+        z_R = self.z_R.to(u.um).value
+
+        # Calculate beam diameter at given local z positions
+        if np.isscalar(self.w0.value): # Circular beam
+            w = w0 * sp.sqrt(1 + (z_local - z0)**2 / z_R**2)
+        else: # Elliptical beam
+            w = sp.Array([
+                w0[0] * sp.sqrt(1 + (z_local - z0)**2 / z_R[0]**2),
+                w0[1] * sp.sqrt(1 + (z_local - z0)**2 / z_R[1]**2),
+            ]) 
+
+        return w 
+
+
+
+    def R_sym(
+            self,
+            z_local: sp.Symbol,
+    ): 
+        z_R = self.z_R.to(u.um).value
+        z0 = self.z0.to(u.um).value
+
+        # Calculate radius of wavefront curvature at given local z positions
+        if np.isscalar(self.w0.value): # Circular beam
+            R = z_local + z_R**2 / (z_local - z0)
+        else: # Elliptical beam
+            R = sp.Array([
+                z_local + z_R[0]**2 / (z_local - z0),
+                z_local + z_R[1]**2 / (z_local - z0),
+            ]) 
+
+        return R
+    
+
+
+    def Psi_sym(
+            self,
+            z_local: sp.Symbol,
+    ): 
+        z_R = self.z_R.to(u.um).value
+        z0 = self.z0.to(u.um).value
+
+        # Calculate Gouy phase at given local z positions
+        if np.isscalar(self.w0.value): # Circular beam
+            Psi = sp.atan((z_local - z0) / z_R)
+        else: # Elliptical beam
+            Psi = sp.Array([
+                sp.atan((z_local - z0) / z_R[0]), 
+                sp.atan((z_local - z0) / z_R[1]), 
+            ])
+
+        return Psi
+
+
+
+    def E_sym(
+            self, 
+            x: sp.Symbol, 
+            y: sp.Symbol, 
+            z: sp.Symbol,
+    ):
+        self.x = x
+        self.y = y
+        self.z = z
+        self._check_input('E_sym')
+
+        # Transform gobal coordinates to local coordinates
+        r = sp.Matrix([self.x, self.y, self.z])
+        r_local = self._rotation_matrix_sym.T * r # inverse of rotation matrix is transpose
+        x_local, y_local, z_local = r_local[0], r_local[1], r_local[2]
+
+        # Calculate beam propagation parameters at given local z positions
+        wz = self.w_sym(z_local)
+        Rz = self.R_sym(z_local)
+        Psiz = self.Psi_sym(z_local)
+
+        E0 = self.E0.to(u.V/u.m).value
+        w0 = self.w0.to(u.um).value
+        k = self.k.to(1/u.um).value
+
+        # Calculate electric field strength
+        if np.isscalar(self.w0.value): # Circular beam, see https://en.wikipedia.org/wiki/Gaussian_beam, but of course it is also the special case
+                                       # of the elliptical beam defined below
+            E = E0 * w0 / wz * sp.exp(-(x_local**2 + y_local**2) / wz**2 \
+                                      - 1j * k * (x_local**2 + y_local**2) / (2*Rz) \
+                                      + 1j * Psiz \
+                                      - 1j * k * z_local)
+
+        else: # Elliptical beam, see equations (62) in chap 16 with c00=E0*sqrt(wx0*wy0), (58) in chap. 16 with (5) in chap. 17 and (49) in chap. 16
+            E = E0 * sp.sqrt(w0[0] / wz[0]) * sp.sqrt(w0[1] / wz[1]) \
+                        * sp.exp(-(x_local**2 / wz[0]**2 + y_local**2 / wz[1]**2) \
+                                 - 1j * k * (x_local**2 / (2*Rz[0]) + y_local**2 / (2*Rz[1])) \
+                                 + 1j * (Psiz[0]/2 + Psiz[1]/2) \
+                                 - 1j * k * z_local)
+
+        return E 
+    
+
+
+    def E_vec_sym(
+            self,
+            x: sp.Symbol, 
+            y: sp.Symbol, 
+            z: sp.Symbol,
+    ):
+        E = self.E_sym(x, y, z)
+        Evec = E * sp.Matrix(self.pol_3d_vec)
+        
+        return Evec
+    
+
+    def I_sym(
+            self,
+            x: sp.Symbol, 
+            y: sp.Symbol, 
+            z: sp.Symbol,
+    ):
+        E = self.E_sym(x, y, z)
+        I = (c.to(u.m/u.s).value*eps0.value/2 * abs(E)**2)
+
+        return I
+
+
+
+    def _calculate_rotation_matrix_sym(
+        self,
+    ):
+        beam_direction_vec = sp.Matrix(self.beam_direction_vec)
+        beam_direction_vec = beam_direction_vec / beam_direction_vec.norm()  # Normalize
+        #assert beam_direction_vec.norm() == 1, "beam_direction_vec must be a unit vector"
+        
+        # Choosing local x-axis based on the beam direction
+        if beam_direction_vec[0] != 0:
+            local_x_axis = sp.Matrix([0, 1, 0])
+        else:
+            local_x_axis = sp.Matrix([1, 0, 0])
+        
+        # Computing local y-axis
+        local_y_axis = beam_direction_vec.cross(local_x_axis)
+        local_y_axis = local_y_axis / local_y_axis.norm()  # Normalize
+        
+        # Adjust local x-axis to ensure orthogonality
+        local_x_axis = local_y_axis.cross(beam_direction_vec)
+        
+        # Constructing rotation matrix
+        R = sp.Matrix.hstack(local_x_axis, local_y_axis, beam_direction_vec)
+        
+        return R
+    
 
 
 
@@ -603,160 +739,3 @@ class GaussianBeam(Beam):
                 raise TypeError('The z-coordinate must be a sympy.Symbol.')
             if not self.z.is_real:
                 raise TypeError('The z-coordinate must be a real sympy.Symbol.')
-
-
-        
-    def w_sym(
-            self,
-            z_local: sp.Symbol,
-    ): 
-        w0 = self.w0.to(u.um).value
-        z0 = self.z0.to(u.um).value
-        z_R = self.z_R.to(u.um).value
-
-        # Calculate beam diameter at given local z positions
-        if np.isscalar(self.w0.value): # Circular beam
-            w = w0 * sp.sqrt(1 + (z_local - z0)**2 / z_R**2)
-        else: # Elliptical beam
-            w = sp.Array([
-                w0[0] * sp.sqrt(1 + (z_local - z0)**2 / z_R[0]**2),
-                w0[1] * sp.sqrt(1 + (z_local - z0)**2 / z_R[1]**2),
-            ]) 
-
-        return w 
-
-
-
-    def R_sym(
-            self,
-            z_local: sp.Symbol,
-    ): 
-        z_R = self.z_R.to(u.um).value
-        z0 = self.z0.to(u.um).value
-
-        # Calculate radius of wavefront curvature at given local z positions
-        if np.isscalar(self.w0.value): # Circular beam
-            R = z_local + z_R**2 / (z_local - z0)
-        else: # Elliptical beam
-            R = sp.Array([
-                z_local + z_R[0]**2 / (z_local - z0),
-                z_local + z_R[1]**2 / (z_local - z0),
-            ]) 
-
-        return R
-    
-
-
-    def Psi_sym(
-            self,
-            z_local: sp.Symbol,
-    ): 
-        z_R = self.z_R.to(u.um).value
-        z0 = self.z0.to(u.um).value
-
-        # Calculate Gouy phase at given local z positions
-        if np.isscalar(self.w0.value): # Circular beam
-            Psi = sp.atan((z_local - z0) / z_R)
-        else: # Elliptical beam
-            Psi = sp.Array([
-                sp.atan((z_local - z0) / z_R[0]), 
-                sp.atan((z_local - z0) / z_R[1]), 
-            ])
-
-        return Psi
-
-
-
-    def E_sym(
-            self, 
-            x: sp.Symbol, 
-            y: sp.Symbol, 
-            z: sp.Symbol,
-    ):
-        self.x = x
-        self.y = y
-        self.z = z
-        self._check_input('E_sym')
-
-        # Transform gobal coordinates to local coordinates
-        r = sp.Matrix([self.x, self.y, self.z])
-        r_local = self._rotation_matrix_sym.T * r # inverse of rotation matrix is transpose
-        x_local, y_local, z_local = r_local[0], r_local[1], r_local[2]
-
-        # Calculate beam propagation parameters at given local z positions
-        wz = self.w_sym(z_local)
-        Rz = self.R_sym(z_local)
-        Psiz = self.Psi_sym(z_local)
-
-        E0 = self.E0.to(u.V/u.m).value
-        w0 = self.w0.to(u.um).value
-        k = self.k.to(1/u.um).value
-
-        # Calculate electric field strength
-        if np.isscalar(self.w0.value): # Circular beam, see https://en.wikipedia.org/wiki/Gaussian_beam, but of course it is also the special case
-                                       # of the elliptical beam defined below
-            E = E0 * w0 / wz * sp.exp(-(x_local**2 + y_local**2) / wz**2 \
-                                      - 1j * k * (x_local**2 + y_local**2) / (2*Rz) \
-                                      + 1j * Psiz \
-                                      - 1j * k * z_local)
-
-        else: # Elliptical beam, see equations (62) in chap 16 with c00=E0*sqrt(wx0*wy0), (58) in chap. 16 with (5) in chap. 17 and (49) in chap. 16
-            E = E0 * sp.sqrt(w0[0] / wz[0]) * sp.sqrt(w0[1] / wz[1]) \
-                        * sp.exp(-(x_local**2 / wz[0]**2 + y_local**2 / wz[1]**2) \
-                                 - 1j * k * (x_local**2 / (2*Rz[0]) + y_local**2 / (2*Rz[1])) \
-                                 + 1j * (Psiz[0]/2 + Psiz[1]/2) \
-                                 - 1j * k * z_local)
-
-        return E 
-    
-
-
-    def E_vec_sym(
-            self,
-            x: sp.Symbol, 
-            y: sp.Symbol, 
-            z: sp.Symbol,
-    ):
-        E = self.E_sym(x, y, z)
-        Evec = E * sp.Matrix(self.pol_3d_vec)
-        
-        return Evec
-    
-
-    def I_sym(
-            self,
-            x: sp.Symbol, 
-            y: sp.Symbol, 
-            z: sp.Symbol,
-    ):
-        E = self.E_sym(x, y, z)
-        I = (c.to(u.m/u.s).value*eps0.value/2 * abs(E)**2)
-
-        return I
-
-
-
-    def _calculate_rotation_matrix_sym(
-        self,
-    ):
-        beam_direction_vec = sp.Matrix(self.beam_direction_vec)
-        beam_direction_vec = beam_direction_vec / beam_direction_vec.norm()  # Normalize
-        #assert beam_direction_vec.norm() == 1, "beam_direction_vec must be a unit vector"
-        
-        # Choosing local x-axis based on the beam direction
-        if beam_direction_vec[0] != 0:
-            local_x_axis = sp.Matrix([0, 1, 0])
-        else:
-            local_x_axis = sp.Matrix([1, 0, 0])
-        
-        # Computing local y-axis
-        local_y_axis = beam_direction_vec.cross(local_x_axis)
-        local_y_axis = local_y_axis / local_y_axis.norm()  # Normalize
-        
-        # Adjust local x-axis to ensure orthogonality
-        local_x_axis = local_y_axis.cross(beam_direction_vec)
-        
-        # Constructing rotation matrix
-        R = sp.Matrix.hstack(local_x_axis, local_y_axis, beam_direction_vec)
-        
-        return R

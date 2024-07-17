@@ -1,18 +1,18 @@
-from abc import ABC, abstractmethod
 from astropy import units as u
 from astropy.constants import c, eps0
 import numpy as np
 from typing import Union
 from collections.abc import Sequence
+import random
 
 from .beams import Beam
 
-class Laser(ABC):
-    @abstractmethod
+class Laser(object):
     def __init__(
         self,
         name: str,
         beams: Sequence[Beam],
+        pol_vec_3d: Union[Sequence[float], np.ndarray, None] = None,
     ) -> None:
         """
         Initializes the laser. A laser can have several beams. The beams interfere with each other to 
@@ -21,13 +21,19 @@ class Laser(ABC):
         Args:
             name: Name of the laser.
             beams: Sequence of beams in the laser.
-            color: Color of the laser.
+            pol_vec_3d: Complex 3d polarization vector of the laser's electric vector field. If it is 
+                        None, it is tried to be determined as (E_vec / E) for the laser's electric field, 
+                        but only if it's constant over space, else it is left at None. Default is None.
         """
-        self.name = name
         self.beams = beams
-    
+        self.name = name
+        self.pol_vec_3d = pol_vec_3d
+        self._check_input('init')
 
-    @abstractmethod
+        self.pol_vec_3d = self._calculate_pol_vec_3d()
+
+        
+    
     def E_vec(
             self,
             x: Union[float, Sequence[float], np.ndarray, u.Quantity],
@@ -46,10 +52,14 @@ class Laser(ABC):
            Returns:
                 u.Quantity: Complex electric field vector of the laser at the position (x,y,z) in [V/m] in the standard Carteesian coordinate system.
         """
-        pass
+        Evecs = [beam.E_vec(x, y, z) for beam in self.beams]
+        Evec = np.array([0, 0, 0], dtype=np.complex128) * u.V/u.m
+        for E in Evecs:
+            Evec += E
+        return Evec.to(u.V/u.m)
 
 
-    @abstractmethod
+
     def E(
             self, 
             x: Union[float, Sequence[float], np.ndarray, u.Quantity], 
@@ -68,9 +78,10 @@ class Laser(ABC):
            Returns:
                 u.Quantity: Complex electric field amplitude of the laser at the position (x,y,z) in [V/m], can be either float or array.
         """
-        pass
+        return np.linalg.norm(self.E_vec(x, y, z), axis=0).to(u.V/u.m)
+    
 
-    @abstractmethod
+
     def I(
             self,
             x: Union[float, Sequence[float], np.ndarray, u.Quantity],
@@ -89,4 +100,75 @@ class Laser(ABC):
            Returns:
                 u.Quantity: Intensity of the laser at the position (x,y,z) in [mW/cm^2], can be either float or array.
         """
-        pass
+        return (c*eps0/2 * np.abs(self.E(x, y, z))**2).to(u.mW/u.cm**2)
+    
+
+    def _calculate_pol_vec_3d(
+            self,
+    ) -> np.ndarray:
+        """Returns the complex 3D polarization vector of the laser.
+        
+           Returns:
+                np.ndarray: Complex 3D polarization vector of the laser's electric vector field.
+        """
+        # Find a position where the electric field is non-zero and calculate the polarization vector
+        pol_vec_3d = np.array([0, 0, 0], dtype=np.complex128)
+        pol_vec_3d_alternative = np.array([0, 0, 0], dtype=np.complex128)
+        flag = True
+        maxiter = 1000
+
+        for _ in range(maxiter):
+            x = random.random() * u.mm 
+            y = random.random() * u.mm
+            z = random.random() * u.mm
+            E = self.E(x, y, z)
+            if E.value != 0:
+                print(E.value)
+                if flag:
+                    pol_vec_3d = (self.E_vec(x, y, z) / E).value
+                    flag = False
+                else:
+                    print('hello')
+                    pol_vec_3d_alternative = (self.E_vec(x, y, z) / E).value
+                    break
+
+        print(pol_vec_3d)
+        print(pol_vec_3d_alternative)
+
+        if np.allclose(pol_vec_3d, pol_vec_3d_alternative) or np.allclose(pol_vec_3d, -pol_vec_3d_alternative):
+            return pol_vec_3d
+        else:
+            print("WARNING: The polarization vector of the laser '" + self.name + "' seems to be not constant over space! It was set to 'None'")
+            return None
+        
+
+
+
+    def _check_input(
+            self, 
+            method: str,
+    ) -> None:
+        """Checks the input of the method ``method``."""
+        if method == 'init':
+            # Check beams
+            if isinstance(self.beams, Beam):
+                self.beams = np.array([self.beams])
+            elif isinstance(self.beams, (Sequence, np.ndarray)):
+                if not all([isinstance(beam, Beam) for beam in self.beams]):
+                    raise TypeError('beams must be an instance of Beam or a sequence of Beam instances.')
+            else:
+                raise TypeError('beams must be an instance of Beam or a sequence of Beam instances.')
+
+            # Check pol_vec_3d
+            if self.pol_vec_3d is not None:
+                if not isinstance(self.pol_vec_3d, (Sequence, np.ndarray)):
+                    raise TypeError('pol_vec_3d must be a sequence or numpy array.')
+                if len(self.pol_vec_3d) == 3:
+                    if all([isinstance(pol, (int, float, complex)) for pol in self.pol_vec_3d]):
+                        self.pol_vec_3d = np.asarray(self.pol_vec_3d, dtype=np.complex128)
+                        self.pol_vec_3d = self.pol_vec_3d / np.linalg.norm(self.pol_vec_3d)
+                    else:
+                        raise TypeError('pol_vec_3d must contain only integers, floats or complex numbers.')
+                else:
+                    raise ValueError('pol_vec_3d must have length 3.')
+                

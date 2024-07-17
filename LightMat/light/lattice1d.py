@@ -16,11 +16,11 @@ class Lattice1d(Laser):
             self,
             lattice_direction_vec: Sequence[float],
             intersect_angle: float,
-            lambda_: Union[u.Quantity, float],
+            lambda_: Union[u.Quantity, float, Sequence[float], np.ndarray],
             w0: Union[u.Quantity, float, Sequence[float], np.ndarray],
-            P: Union[u.Quantity, float],
-            pol_Jones_vec: Union[str, Sequence[float]] = 'linear horizontal',
-            z0: Union[u.Quantity, float] = 0 * u.um,
+            P: Union[u.Quantity, float, Sequence[float], np.ndarray],
+            pol_Jones_vec: Union[str, Sequence[float], Sequence[str]] = 'linear horizontal',
+            z0: Union[u.Quantity, float, Sequence[float], np.ndarray] = 0 * u.um,
             name: str = 'Lattice1d',
     ) -> None:
         """Initializes a Lattice1d Laser instance. It hosts two beams interfering with each other to form a 1d lattice.
@@ -66,7 +66,8 @@ class Lattice1d(Laser):
         # Create the two GaussianBeam instances for the two counterpropagating lattice beams
         self.beam_forward = GaussianBeam(
             beam_direction_vec=self.beam_direction_forward_vec,
-            pol_Jones_vec=self.pol_Jones_vec if self.pol_Jones_vec.ndim == 1 and not isinstance(self.pol_Jones_vec[0], str) else self.pol_Jones_vec[0],
+            pol_Jones_vec=self.pol_Jones_vec if isinstance(self.pol_Jones_vec, str) or \
+                                                (self.pol_Jones_vec.ndim == 1 and not isinstance(self.pol_Jones_vec[0], str)) else self.pol_Jones_vec[0],
             lambda_=self.lambda_ if self.lambda_.isscalar else self.lambda_[0],
             w0=self.w0 if self.w0.ndim == 1 or self.w0.isscalar else self.w0[0],
             P=self.P if self.P.isscalar else self.P[0],
@@ -75,7 +76,8 @@ class Lattice1d(Laser):
 
         self.beam_backward = GaussianBeam(
             beam_direction_vec=self.beam_direction_backward_vec,
-            pol_Jones_vec=self.pol_Jones_vec if self.pol_Jones_vec.ndim == 1 and not isinstance(self.pol_Jones_vec[1], str) else self.pol_Jones_vec[1],
+            pol_Jones_vec=self.pol_Jones_vec if isinstance(self.pol_Jones_vec, str) or \
+                                                (self.pol_Jones_vec.ndim == 1 and not isinstance(self.pol_Jones_vec[1], str)) else self.pol_Jones_vec[1],
             lambda_=self.lambda_ if self.lambda_.isscalar else self.lambda_[1],
             w0=self.w0 if self.w0.ndim == 1 or self.w0.isscalar else self.w0[1],
             P=self.P if self.P.isscalar else self.P[1],
@@ -85,102 +87,7 @@ class Lattice1d(Laser):
         super().__init__(
             name = self.name,
             beams = [self.beam_forward, self.beam_backward], 
-        )
-
-
-    
-
-    def E_vec(
-            self,
-            x: Union[u.Quantity, float, Sequence[float], np.ndarray],
-            y: Union[u.Quantity, float, Sequence[float], np.ndarray],
-            z: Union[u.Quantity, float, Sequence[float], np.ndarray],
-    ) -> u.Quantity:
-        """Returns the electric field vector of the 1d lattice at the given position.
-        
-           Args:
-                x: x-coordinate of the position in [um].
-                y: y-coordinate of the position in [um].
-                z: z-coordinate of the position in [um].
-
-           Returns:
-                np.ndarray: The electric field vector of the lattice beam at the given position.
-        """
-        E_forward = self.beam_forward.E_vec(x, y, z)
-        E_backward = self.beam_backward.E_vec(x, y, z)
-        return (E_forward + E_backward).to(u.V/u.m)
-
-
-    def E(
-            self,
-            x: Union[u.Quantity, float, Sequence[float], np.ndarray],
-            y: Union[u.Quantity, float, Sequence[float], np.ndarray],
-            z: Union[u.Quantity, float, Sequence[float], np.ndarray],
-    ) -> np.ndarray:
-        """Returns the electric field of the 1d lattice at the given position.
-        
-           Args:
-                x: x-coordinate of the position in [um].
-                y: y-coordinate of the position in [um].
-                z: z-coordinate of the position in [um].
-
-           Returns:
-                np.ndarray: The electric field of the lattice beam at the given position.
-        """
-        return np.linalg.norm(self.E_vec(x, y, z), axis=0).to(u.V/u.m)
-    
-
-
-    def I(
-            self,
-            x: Union[u.Quantity, float, Sequence[float], np.ndarray],
-            y: Union[u.Quantity, float, Sequence[float], np.ndarray],
-            z: Union[u.Quantity, float, Sequence[float], np.ndarray],
-    ) -> np.ndarray:
-        """Returns the intensity of the 1d lattice at the given position.
-        
-           Args:
-                x: x-coordinate of the position in [um].
-                y: y-coordinate of the position in [um].
-                z: z-coordinate of the position in [um].
-
-           Returns:
-                np.ndarray: The intensity of the lattice beam at the given position.
-        """
-        return (c*eps0/2 * np.abs(self.E(x, y, z))**2).to(u.mW/u.cm**2)
-    
-
-
-    def E_vec_sym(
-            self,
-            x: sp.Symbol,
-            y: sp.Symbol,
-            z: sp.Symbol,
-    ):
-        E_forward = self.beam_forward.E_vec_sym(x, y, z)
-        E_backward = self.beam_backward.E_vec_sym(x, y, z)
-        return E_forward + E_backward
-    
-
-    def E_sym(
-            self,
-            x: sp.Symbol,
-            y: sp.Symbol,
-            z: sp.Symbol,
-    ):
-        return self.E_vec_sym(x, y, z).norm()
-        
-
-    def I_sym(
-            self,
-            x: sp.Symbol,
-            y: sp.Symbol,
-            z: sp.Symbol,
-    ):
-        E = self.E_sym(x, y, z)
-        I = (c.to(u.m/u.s).value*eps0.value/2 * abs(E)**2)
-
-        return I
+        )   
     
 
 
@@ -289,16 +196,10 @@ class Lattice1d(Laser):
                 if self.pol_Jones_vec not in ['linear horizontal', 'linear vertical', 'circular right', 'circular left']:
                     raise ValueError('The polarization Jones vector must be one of the following strings: ["linear horizontal", "linear vertical", "circular right", "circular left"].')
             elif isinstance(self.pol_Jones_vec, (Sequence, np.ndarray)):
-                self.pol_Jones_vec = np.asarray(self.pol_Jones_vec)
+                self.pol_Jones_vec = np.asarray(self.pol_Jones_vec) 
                 if self.pol_Jones_vec.ndim == 1:
                     if len(self.pol_Jones_vec) != 2:
-                        raise ValueError('The polarization Jones vector must be a 2d vector or a list of two 2d vectors.')
-                    
-                    if self.pol_Jones_vec[0] not in ['linear horizontal', 'linear vertical', 'circular right', 'circular left'] \
-                        or self.pol_Jones_vec[1] not in ['linear horizontal', 'linear vertical', 'circular right', 'circular left']:
-                        raise ValueError('If the polarization Jones vector is a list of two strings, the strings must be one of the following: \n' \
-                                         + '["linear horizontal", "linear vertical", "circular right", "circular left"].')
-                
+                        raise ValueError('The polarization Jones vector must be a 2d vector or a list of two 2d vectors.')                
                 elif self.pol_Jones_vec.ndim == 2:
                     if len(self.pol_Jones_vec) != 2 or len(self.pol_Jones_vec[0]) != 2 or len(self.pol_Jones_vec[1]) != 2:
                         raise ValueError('The polarization Jones vector must be a 2d vector or a list of two 2d vectors.')
