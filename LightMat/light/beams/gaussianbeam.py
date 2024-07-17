@@ -223,7 +223,7 @@ class GaussianBeam(Beam):
             R[mask] = (z_local[mask] - self.z0) + self.z_R**2 / (z_local[mask] - self.z0)
             R[~mask] = np.inf * u.um
         else: # Elliptical beam
-            R = np.zeros((2, len(z_local))) * u.um
+            R = np.zeros((2,) + z_local.shape) * u.um
             R[0, mask] = (z_local[mask] - self.z0) + self.z_R[0]**2 / (z_local[mask] - self.z0).to(self.z_local.unit)
             R[1, mask] = (z_local[mask] - self.z0) + self.z_R[1]**2 / (z_local[mask] - self.z0).to(self.z_local.unit)
             R[:, ~mask] = np.inf * u.um

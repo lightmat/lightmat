@@ -169,12 +169,14 @@ class LaserSetup(object):
             if isinstance(self.lasers, Sequence):
                 for i, laser in enumerate(self.lasers):
                     if isinstance(laser, Beam):
-                        self.lasers[i] = Laser(name=laser.name, beams=[laser])
+                        self.lasers[i] = Laser(name=laser.name, beams=[laser], pol_vec_3d=laser.pol_vec_3d)
                     elif not isinstance(laser, Laser):
                         raise TypeError(f"lasers must be an instance of Laser or Beam, not {type(laser)}")
             elif isinstance(self.lasers, Beam):
-                self.lasers = Laser(name=self.lasers.name, beams=[self.lasers])
-            elif not isinstance(self.lasers, Laser):
+                self.lasers = [Laser(name=self.lasers.name, beams=[self.lasers], pol_vec_3d=self.lasers.pol_vec_3d)]
+            elif isinstance(self.lasers, Laser):
+                self.lasers = [self.lasers]
+            else:
                 raise TypeError(f"lasers must be an instance of Laser or Beam, not {type(self.lasers)}")
 
 
