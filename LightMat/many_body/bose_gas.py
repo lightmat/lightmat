@@ -713,16 +713,18 @@ class BoseGas:
 
     def plot_density_1d(
             self, 
+            which: str = 'all',
             num_points: int = 200,
             **kwargs,
         ) -> Figure:
         """Plot the spatial density n(x,0,0), n(0,y,0) and n(0,0,z) along each direction respectively.
         
-           Args:
+        Args:
+                which: which densities to plot, either 'all', 'n', 'n0', or 'n_ex'. Defaults to 'all'.
                 num_points: number of points along each direction to evaluate the density at. Defaults to 200.
                 **kwargs: keyword arguments for the plot, supported are 'title' and 'filename'.
 
-           Returns:
+        Returns:
                 fig: matplotlib figure object.
         """ 
         if (self.particle_props.T.value < self.zero_T_threshold and self.N_particles is not None) or np.linalg.norm(self.n_ex_array) > 0:
@@ -737,38 +739,42 @@ class BoseGas:
             y = np.linspace(self.particle_props.domain[1][0].value, self.particle_props.domain[1][1].value, num_points)
             z = np.linspace(self.particle_props.domain[2][0].value, self.particle_props.domain[2][1].value, num_points)
 
-            nx = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, x, 0, 0))
-            n0x = self._check_n(self.spatial_basis_set.expand_coeffs(self.n0_array, x, 0, 0))
-            n_exx = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_ex_array, x, 0, 0))
+            densities = {
+                'n': {'x': self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, x, 0, 0)),
+                    'y': self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, 0, y, 0)),
+                    'z': self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, 0, 0, z))},
+                'n0': {'x': self._check_n(self.spatial_basis_set.expand_coeffs(self.n0_array, x, 0, 0)),
+                    'y': self._check_n(self.spatial_basis_set.expand_coeffs(self.n0_array, 0, y, 0)),
+                    'z': self._check_n(self.spatial_basis_set.expand_coeffs(self.n0_array, 0, 0, z))},
+                'n_ex': {'x': self._check_n(self.spatial_basis_set.expand_coeffs(self.n_ex_array, x, 0, 0)),
+                        'y': self._check_n(self.spatial_basis_set.expand_coeffs(self.n_ex_array, 0, y, 0)),
+                        'z': self._check_n(self.spatial_basis_set.expand_coeffs(self.n_ex_array, 0, 0, z))}
+            }
 
-            ny = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, 0, y, 0))
-            n0y = self._check_n(self.spatial_basis_set.expand_coeffs(self.n0_array, 0, y, 0))
-            n_exy = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_ex_array, 0, y, 0))
+            if which == 'all':
+                which_keys = ['n', 'n0', 'n_ex']
+            else:
+                which_keys = [which]
 
-            nz = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_array, 0, 0, z))
-            n0z = self._check_n(self.spatial_basis_set.expand_coeffs(self.n0_array, 0, 0, z))
-            n_exz = self._check_n(self.spatial_basis_set.expand_coeffs(self.n_ex_array, 0, 0, z))
+            labels = {
+                'n': r'$n_{total}$',
+                'n0': r'$n_0$',
+                'n_ex': r'$n_{ex}$'
+            }
 
-            axs[0].plot(x, nx, c='k', marker='o', label=r'$n_{total}$')
-            axs[0].plot(x, n0x, c='b', marker='o', label=r'$n_0$')
-            axs[0].plot(x, n_exx, c='g', marker='o', label=r'$n_{ex}$')
-            axs[0].set_title(r'$n(x,0,0)$', fontsize=18)
-            axs[0].set_xlabel(r'$x \; \left[\mu m\right]$', fontsize=14)
-            axs[0].set_ylabel(r'$n(x,0,0) \; \left[\mu m^{-3}\right]$', fontsize=14)
+            colors = {
+                'n': 'k',
+                'n0': 'b',
+                'n_ex': 'g'
+            }
 
-            axs[1].plot(y, ny, c='k', marker='o', label=r'$n_{total}$')
-            axs[1].plot(y, n0y, c='b', marker='o', label=r'$n_0$')
-            axs[1].plot(y, n_exy, c='g', marker='o', label=r'$n_{ex}$')
-            axs[1].set_title(r'$n(0,y,0)$', fontsize=18)
-            axs[1].set_xlabel(r'$y \; \left[\mu m\right]$', fontsize=14)
-            axs[1].set_ylabel(r'$n(0,y,0) \; \left[\mu m^{-3}\right]$', fontsize=14)
+            for i, (direction, ax) in enumerate(zip(['x', 'y', 'z'], axs)):
+                for key in which_keys:
+                    ax.plot(eval(direction), densities[key][direction], c=colors[key], marker='o', label=labels[key])
 
-            axs[2].plot(z, nz, c='k', marker='o', label=r'$n_{total}$')
-            axs[2].plot(z, n0z, c='b', marker='o', label=r'$n_0$')
-            axs[2].plot(z, n_exz, c='g', marker='o', label=r'$n_{ex}$')
-            axs[2].set_title(r'$n(0,0,z)$', fontsize=18)
-            axs[2].set_xlabel(r'$z \; \left[\mu m\right]$', fontsize=14)
-            axs[2].set_ylabel(r'$n(0,0,z) \; \left[\mu m^{-3}\right]$', fontsize=14)
+                ax.set_title(rf'$n(0,0,{direction})$', fontsize=18)
+                ax.set_xlabel(rf'${direction} \; \left[\mu m\right]$', fontsize=14)
+                ax.set_ylabel(rf'$n(0,0,{direction}) \; \left[\mu m^{-3}\right]$', fontsize=14)
 
             for i in range(3):
                 ax2 = axs[i].twinx()  # Create a secondary y-axis for potential
@@ -785,18 +791,17 @@ class BoseGas:
                 axs[i].grid(True)
                 
             h, _ = axs[0].get_legend_handles_labels()  
-            labels = [r'$n_{total}$', r'$n_0$', r'$n_{ex}$', '$V_{trap}$']
+            labels = [labels[key] for key in which_keys] + ['$V_{trap}$']
             fig.legend(h+line1, labels, loc='upper right', fontsize=14, fancybox=True, framealpha=0.9, bbox_to_anchor=(1, 1))  
 
             fig.tight_layout(rect=[0, 0, 0.95, 1])
-            if filename != None:
+            if filename is not None:
                 fig.savefig(filename, dpi=300, bbox_inches='tight')
 
             return fig
         
         else:
             print("No convergence history found. Please run eval_density() first.")
-
 
     def plot_density_2d(
             self, 

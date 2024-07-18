@@ -51,6 +51,12 @@ class LaserSetup(object):
            Returns:
                 u.Quantity: Potential of the `atom` in its hfs state given the light field of the `lasers` at the position (x,y,z) in [h x MHz].
         """
+        F = self.atom.hfs_state['F']
+        mF = self.atom.hfs_state['mF']
+
+        # Add the potential from each laser to the total potential
+        V = 0 * u.MHz # in [h x MHz]
+
         for laser in self.lasers:
             # Calculate the electric field amplitude of the laser at the position (x,y,z)
             E_squared = np.real(laser.E(x, y, z) * np.conj(laser.E(x, y, z))) # this is real anyways, just get rid of complex cast warnings
@@ -61,14 +67,16 @@ class LaserSetup(object):
             alpha_t = self.atom.tensor_hfs_polarizability(laser.omega)
 
             # Calculate the coefficients, equation (20) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
-            C = 0
-            D = 0
-            if all([beam.pol_vec_3d == self.beams[0].pol_vec_3d for beam in self.beams]):
-                pol_vec_3d = self.beams[0].pol_vec_3d
-                C = 2 * np.imag(np.conj(pol_vec_3d[0]) * pol_vec_3d[1])
-                D = 1 - 3*np.conj(pol_vec_3d[2]) * pol_vec_3d[2]
+            if laser.pol_vec_3d is not None:
+                C = 2 * np.imag(np.conj(laser.pol_vec_3d[0]) * laser.pol_vec_3d[1])
+                D = 1 - 3*np.conj(laser.pol_vec_3d[2]) * laser.pol_vec_3d[2]
             else:
-                raise ValueError("The potential can only be calculated if all beams of each laser have the same polarization.")
+                raise ValueError("The potential can only be calculated if all lasers have a specified pol_vec_3d.")
+            
+            # Calculate the potential, equation (19) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
+            V += (-1/4 * E_squared * (alpha_s + C*alpha_v*mF/(2*F) - D*alpha_t*(3*mF**2 - F*(F+1)) / (2*F*(2*F-1)))).to(u.MHz)
+
+        return V
 
 
 
@@ -124,7 +132,7 @@ class LaserSetup(object):
                                 label=None)
                         if k == 1:
                             ax.quiver(0, 0, 0, end_point_positive[0], end_point_positive[1], end_point_positive[2], 
-                                    color=color, length=scale_factor, arrow_length_ratio=0.1, linewidth=2, alpha=1)
+                                    color=color, length=scale_factor, arrow_length_ratio=0.1, linewidth=2, alpha=1,)
                     elif end_point_positive[2] < 0 and end_point_negative[2] >= 0:
                         ax.plot(*np.column_stack((end_point_positive, [0, 0, 0])), color=color,
                                 linewidth=1 + k * 0.5, alpha=0.2 / k,
@@ -134,21 +142,22 @@ class LaserSetup(object):
                                 label=None)
                         if k == 1:
                             ax.quiver(0, 0, 0, end_point_positive[0], end_point_positive[1], end_point_positive[2], 
-                                    color=color, length=scale_factor, arrow_length_ratio=0.1, linewidth=2, alpha=0.2)
+                                    color=color, length=scale_factor, arrow_length_ratio=0.1, linewidth=2, alpha=0.2,)
                     elif end_point_positive[2] < 0 and end_point_negative[2] < 0:
                         ax.plot(*np.column_stack((end_point_positive, end_point_negative)), color=color,
                                 linewidth=1 + k * 0.5, alpha=0.2 / k,
                                 label=None)
                         if k == 1:
                             ax.quiver(0, 0, 0, end_point_positive[0], end_point_positive[1], end_point_positive[2], 
-                                    color=color, length=scale_factor, arrow_length_ratio=0.1, linewidth=2, alpha=0.2)
+                                    color=color, length=scale_factor, arrow_length_ratio=0.1, linewidth=2, alpha=0.2,)
                     elif end_point_positive[2] >= 0 and end_point_negative[2] >= 0:
                         ax.plot(*np.column_stack((end_point_positive, end_point_negative)), color=color,
                                 linewidth=1 + k * 0.5, alpha=1 / k,
                                 label=None)
                         if k == 1:
                             ax.quiver(0, 0, 0, end_point_positive[0], end_point_positive[1], end_point_positive[2], 
-                                    color=color, length=scale_factor, arrow_length_ratio=0.1, linewidth=2, alpha=1)
+                                    color=color, length=scale_factor, arrow_length_ratio=0.1, linewidth=2, alpha=1,)
+                            
                     
                 # Adding an invisible plot for the legend
                 if j == 0:
