@@ -16,9 +16,10 @@ class Lattice1d(Laser):
             self,
             lattice_direction_vec: Sequence[float],
             intersect_angle: float,
-            lambda_: Union[u.Quantity, float, Sequence[float], np.ndarray],
+            lambda_: Union[u.Quantity, float],
             w0: Union[u.Quantity, float, Sequence[float], np.ndarray],
             P: Union[u.Quantity, float, Sequence[float], np.ndarray],
+            intersect_axis: Union[Sequence[float], np.ndarray, None] = None,
             pol_Jones_vec: Union[str, Sequence[float], Sequence[str]] = 'linear horizontal',
             z0: Union[u.Quantity, float, Sequence[float], np.ndarray] = 0 * u.um,
             name: str = 'Lattice1d',
@@ -29,13 +30,15 @@ class Lattice1d(Laser):
                 lattice_direction_vec: 3d vector specifying the 1d lattice direction in the global standard Carteesian 
                                        coordinate system.
                 intersect_angle: Angle in [deg] between the two counterpropagating beams making up the lattice.
-                lambda_: Wavelength of the beams in [nm]. Can either be a scalar or 2d vector specifying different wavelengths
-                         for the two counterpropagating beams.
+                lambda_: Wavelength of the two beams in [nm]. 
                 w0: Beam waist diameter in [um]. Either a scalar for the same circular beam waist for both beams or a 2d vector
                     for the same elliptical beam waist for both beams, or a list of two 2d vectors for different beam waists
                     for the two lattice beams.
                 P: Power of the beam in [W]. Either a scalar for the same power in both beams or a 2d vector for different power
                    in the two lattice beams.
+                intersect_axis: 3d vector specifying the axis around which the two counterpropagating beams are 
+                                rotated apart by ``intersect_angle``. If None, than the z-axis is chosen, unless the
+                                ``lattice_direction_vec`` is along z-axis, then the y-axis. Defaults to None.
                 pol_Jones_vec: 2d vector specifying the polarization of the beam in the local x-y plane. The convention of
                                is that the horizontal polarization is along the local x-direction and the vertical polarization
                                along the local y-direction. Either a 2d vector for the same polarization for both beams or a list
@@ -55,6 +58,7 @@ class Lattice1d(Laser):
         self.lambda_ = lambda_
         self.w0 = w0
         self.P = P
+        self.intersect_axis = intersect_axis
         self.pol_Jones_vec = pol_Jones_vec
         self.z0 = z0
         self.name = name
@@ -106,12 +110,15 @@ class Lattice1d(Laser):
         # This can be any vector not parallel to lattice_direction, but a common choice
         # is to use the cross product with a standard basis vector that is not aligned with it.
         # For simplicity, choose the z-axis or any other axis that is not parallel to lattice_direction.
-        z_axis = np.array([0, 0, 1])
-        if np.allclose(self.lattice_direction_vec, z_axis):
-            # If lattice_direction is parallel to the z-axis, choose a different axis for the cross product
-            z_axis = np.array([0, 1, 0])
-        rotation_axis = np.cross(self.lattice_direction_vec, z_axis)
+        rotation_axis = self.intersect_axis
+        if rotation_axis is None:
+            z_axis = np.array([0, 0, 1])
+            if np.allclose(self.lattice_direction_vec, z_axis):
+                # If lattice_direction is parallel to the z-axis, choose a different axis for the cross product
+                z_axis = np.array([0, 1, 0])
+            rotation_axis = np.cross(self.lattice_direction_vec, z_axis)
         rotation_axis = rotation_axis / np.linalg.norm(rotation_axis)  # Normalize the rotation axis
+        
 
         # Create rotation objects for rotating around the calculated axis by ±half_angle
         rotation_forward = R.from_rotvec(rotation_axis * np.deg2rad(self.intersect_angle / 2))
@@ -151,10 +158,8 @@ class Lattice1d(Laser):
                     raise ValueError('The wavelength must be in units equivalent to nm.')
             elif isinstance(self.lambda_, (float, int)):
                 self.lambda_ = self.lambda_ * u.nm
-            elif isinstance(self.lambda_, (Sequence, np.ndarray)):
-                if len(self.lambda_) != 2:
-                    raise ValueError('The wavelength must be a scalar or a 2d vector.')
-                self.lambda_ = np.asarray(self.lambda_) * u.nm
+            else:
+                raise ValueError('The wavelength must be an astropy Quantity or a float.')
 
             
             # Check beam waist diameter
@@ -190,6 +195,18 @@ class Lattice1d(Laser):
             else:
                 raise ValueError('The power must be a scalar or a 2d vector.')
             
+
+            # Check intersect axis
+            if self.intersect_axis is not None:
+                if not isinstance(self.intersect_axis, (Sequence, np.ndarray)):
+                    raise TypeError('The intersect_axis must be a sequence.')
+                if not len(self.intersect_axis) == 3:
+                    raise ValueError('The intersect_axis must be a 3d vector.')
+                self.intersect_axis = np.asarray(self.intersect_axis)
+                self.intersect_axis = self.intersect_axis / np.linalg.norm(self.intersect_axis)
+                if np.allclose(self.intersect_axis, self.lattice_direction_vec):
+                    raise ValueError('The intersect_axis must not be parallel to the lattice direction vector.')
+
 
             # Check polarization Jones vector
             if isinstance(self.pol_Jones_vec, str):

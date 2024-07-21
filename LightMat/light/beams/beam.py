@@ -38,6 +38,14 @@ class Beam(ABC):
         self.pol_Jones_vec = pol_Jones_vec
         self.pol_vec_3d = pol_vec_3d
 
+        # Convention: First non-zero element of the 3d polarization vector is positive.
+        if self.pol_vec_3d[0] < 0:
+            self.pol_vec_3d = -self.pol_vec_3d
+        elif self.pol_vec_3d[1] < 0:
+            self.pol_vec_3d = -self.pol_vec_3d
+        elif self.pol_vec_3d[2] < 0:
+            self.pol_vec_3d = -self.pol_vec_3d
+
         self.k = (2*np.pi / (self.lambda_)).to(1/u.um)
         self.omega = (2*np.pi*c/self.lambda_).to(u.THz)
         

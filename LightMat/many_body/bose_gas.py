@@ -731,7 +731,7 @@ class BoseGas:
             title = kwargs.get('title', 'Spacial density, T='+str(self.particle_props.T)+', N='+str(int(self.N_particles)))  
             filename = kwargs.get('filename', None) 
 
-            fig, axs = plt.subplots(1, 3, figsize=(14, 6))
+            fig, axs = plt.subplots(1, 3, figsize=(17, 6))
             plt.subplots_adjust(top=0.85)
             fig.suptitle(title, fontsize=24)
 

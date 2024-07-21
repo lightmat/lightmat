@@ -17,7 +17,7 @@ class BowtieLattice2d(Laser):
                 self,
                 lattice_direction_vec1: Sequence[float],
                 lattice_direction_vec2: Sequence[float],
-                lambda_: Union[u.Quantity, float, Sequence[float], np.ndarray],
+                lambda_: Union[u.Quantity, float],
                 w0: Union[u.Quantity, float, Sequence[float], np.ndarray],
                 P: Union[u.Quantity, float, Sequence[float], np.ndarray],
                 pol_Jones_vec: Union[str, Sequence[float], Sequence[str]] = 'linear horizontal',
@@ -32,8 +32,7 @@ class BowtieLattice2d(Laser):
                                         coordinate system.
                 lattice_direction_vec2: 3d vector specifying the second lattice propagation in the global standard Carteesian 
                                         coordinate system.
-                lambda_: Wavelength of the beams in [nm]. Can either be a scalar or 4d vector specifying different wavelengths
-                         for all beams.
+                lambda_: Wavelength of the four beams in [nm]. 
                 w0: Beam waist diameter in [um]. Either a scalar for the same circular beam waist for all beams or a 2d vector
                     for the same elliptical beam waist for all beams, or a list of four 2d vectors for different beam waists
                     for all lattice beams.
@@ -136,10 +135,8 @@ class BowtieLattice2d(Laser):
                         raise ValueError('The wavelength must be in units equivalent to nm.')
                 elif isinstance(self.lambda_, (float, int)):
                     self.lambda_ = self.lambda_ * u.nm
-                elif isinstance(self.lambda_, (Sequence, np.ndarray)):
-                    if len(self.lambda_) != 4:
-                        raise ValueError('The wavelength must be a scalar or a 4d vector.')
-                    self.lambda_ = np.asarray(self.lambda_) * u.nm
+                else:
+                    raise ValueError('The wavelength must be an astropy Quantity or a float.')
 
                 
                 # Check beam waist diameter

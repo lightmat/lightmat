@@ -327,14 +327,14 @@ class Atom(object):
                     raise TypeError("n must be an int.")
                 if not self.hfs_state['L'] in ['s', 'p', 'd', 'f', 'g', 'h', 'i']:
                     raise TypeError("L must be a str in ['s', 'p', 'd', 'f', 'g', 'h', 'i'].")
-                if not isinstance(self.hfs_state['J'], float):
+                if not isinstance(self.hfs_state['J'], (float, int)):
                     raise TypeError("J must be a float.")
-                if not isinstance(self.hfs_state['F'], float):
+                if not isinstance(self.hfs_state['F'], (float, int)):
                     raise TypeError("F must be a float.")
-                if not isinstance(self.hfs_state['mF'], int):
-                    raise TypeError("mF must be an int.")
-                if not isinstance(self.hfs_state['I'], int):
-                    raise TypeError("I must be an int.")
+                if not isinstance(self.hfs_state['mF'], (float, int)):
+                    raise TypeError("mF must be an float.")
+                if not isinstance(self.hfs_state['I'], (float, int)):
+                    raise TypeError("I must be an float.")
             else:
                 raise TypeError("hfs_state must be a dict of form {'n': int, 'L': str, 'J': float, 'F': float, 'mF': int, 'I': int}.")
             

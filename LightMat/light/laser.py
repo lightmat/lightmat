@@ -36,6 +36,12 @@ class Laser(object):
         if self.pol_vec_3d is None:
             self.pol_vec_3d = self._calculate_pol_vec_3d()
 
+        if any(self.beams[0].lambda_ != beam.lambda_ for beam in self.beams):
+            raise ValueError('All beams must have the same wavelength.')
+        else:
+            self.lambda_ = self.beams[0].lambda_
+            self.omega = (2*np.pi*c/self.lambda_).to(u.THz)
+
         
     
     def E_vec(
@@ -82,7 +88,7 @@ class Laser(object):
         """
         #return np.linalg.norm(self.E_vec(x, y, z), axis=0).to(u.V/u.m)
         Es = np.array([beam.E(x, y, z).to(u.V/u.m).value for beam in self.beams])
-        E = np.sum(Es) * u.V/u.m
+        E = np.sum(Es, axis=0) * u.V/u.m
         return E 
     
 
@@ -116,34 +122,38 @@ class Laser(object):
            Returns:
                 np.ndarray: Complex 3D polarization vector of the laser's electric vector field.
         """
-        ## Find a position where the electric field is non-zero and calculate the polarization vector
-        pol_vec_3d = np.array([0, 0, 0], dtype=np.complex128)
-        pol_vec_3d_alternative = np.array([0, 0, 0], dtype=np.complex128)
-        flag = True
-        maxiter = 1000
-
-        for _ in range(maxiter):
-            x = random.random() * u.mm 
-            y = random.random() * u.mm
-            z = random.random() * u.mm
-            E = self.E(x, y, z)
-            if np.abs(E.value) > 1e-10 and np.abs(E.value) < 1e10:
-                if flag:
-                    pol_vec_3d = (self.E_vec(x, y, z) / E).value
-                    flag = False
-                else:
-                    pol_vec_3d_alternative = (self.E_vec(x, y, z) / E).value
-                    break
-
-        print('pol_vec_3d             :', pol_vec_3d)
-        print('pol_vec_3d_alternative :', pol_vec_3d_alternative)
-        print('\n')
-
-        if np.allclose(pol_vec_3d, pol_vec_3d_alternative) or np.allclose(pol_vec_3d, -pol_vec_3d_alternative):
-            return pol_vec_3d
-        else:
-            print("WARNING: The polarization vector of the laser '" + self.name + "' seems to be not constant over space! It was set to 'None'.")
-            return None
+        # Find a position where the electric field is non-zero and calculate the polarization vector
+        #pol_vec_3d = np.array([0, 0, 0], dtype=np.complex128)
+        #pol_vec_3d_alternative = np.array([0, 0, 0], dtype=np.complex128)
+        #flag = True
+        #maxiter = 1000
+#
+        #for _ in range(maxiter):
+        #    x = random.random() * u.mm 
+        #    y = random.random() * u.mm
+        #    z = random.random() * u.mm
+        #    E = self.E(x, y, z)
+        #    if np.abs(E.value) > 1e-10 and np.abs(E.value) < 1e10:
+        #        if flag:
+        #            pol_vec_3d = (self.E_vec(x, y, z) / E).value
+        #            flag = False
+        #        else:
+        #            pol_vec_3d_alternative = (self.E_vec(x, y, z) / E).value
+        #            break
+#
+        #print('pol_vec_3d             :', pol_vec_3d)
+        #print('pol_vec_3d_alternative :', pol_vec_3d_alternative)
+        #print('\n')
+#
+        #if np.allclose(pol_vec_3d, pol_vec_3d_alternative) or np.allclose(pol_vec_3d, -pol_vec_3d_alternative):
+        #    return pol_vec_3d
+        #else:
+        #    print("WARNING: The polarization vector of the laser '" + self.name + "' seems to be not constant over space! It was set to 'None'.")
+        #    return None
+        pol_vec = np.array([0, 0, 0], dtype=np.complex128)
+        for beam in self.beams:
+            pol_vec = pol_vec + np.sqrt(beam.P.to(u.mW).value) * beam.pol_vec_3d
+        return pol_vec / np.linalg.norm(pol_vec)
         
 
 

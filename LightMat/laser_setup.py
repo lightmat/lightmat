@@ -59,22 +59,24 @@ class LaserSetup(object):
 
         for laser in self.lasers:
             # Calculate the electric field amplitude of the laser at the position (x,y,z)
+            print(f'Calculating electric field amplitude of laser {laser.name}...')
             E_squared = np.real(laser.E(x, y, z) * np.conj(laser.E(x, y, z))) # this is real anyways, just get rid of complex cast warnings
 
             # Calculate the polarizabilities of the atom in the hfs state for the laser frequency
+            print(f'Calculating polarizability of hfs state {self.atom.hfs_state} at λ={laser.lambda_}...')
             alpha_s = self.atom.scalar_hfs_polarizability(laser.omega)
             alpha_v = self.atom.vector_hfs_polarizability(laser.omega)
             alpha_t = self.atom.tensor_hfs_polarizability(laser.omega)
 
             # Calculate the coefficients, equation (20) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
             if laser.pol_vec_3d is not None:
-                C = 2 * np.imag(np.conj(laser.pol_vec_3d[0]) * laser.pol_vec_3d[1])
-                D = 1 - 3*np.conj(laser.pol_vec_3d[2]) * laser.pol_vec_3d[2]
+                C = np.real(2 * np.imag(np.conj(laser.pol_vec_3d[0]) * laser.pol_vec_3d[1])) # this is real anyways, just get rid of complex cast warnings
+                D = np.real(1 - 3*np.conj(laser.pol_vec_3d[2]) * laser.pol_vec_3d[2]) # this is real anyways, just get rid of complex cast warnings
             else:
                 raise ValueError("The potential can only be calculated if all lasers have a specified pol_vec_3d.")
             
             # Calculate the potential, equation (19) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
-            V += (-1/4 * E_squared * (alpha_s + C*alpha_v*mF/(2*F) - D*alpha_t*(3*mF**2 - F*(F+1)) / (2*F*(2*F-1)))).to(u.MHz)
+            V = V + (-1/4 * E_squared * (alpha_s + C*alpha_v*mF/(2*F) - D*alpha_t*(3*mF**2 - F*(F+1)) / (2*F*(2*F-1)))).to(u.MHz)
 
         return V
 
