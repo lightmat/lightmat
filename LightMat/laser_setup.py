@@ -19,19 +19,25 @@ class LaserSetup(object):
     def __init__(
             self,
             lasers: Union[Laser, Beam, Sequence[Union[Laser, Beam]]],
-            atom: Union[Atom, None] = None, 
+            atoms: Union[Atom, Sequence[Atom], None] = None, 
     ) -> None:
-        """Initialise the LaserSetup object. Either provide a single laser or a sequence of lasers and if an atom 
-           object is provided, the potential of the atom in its hfs state can be calculated with self.V().
+        """Initialise the LaserSetup object. Either provide a single laser or a sequence of lasers. If an atom or 
+           sequence of atoms is provided, the potential of the laser setup in the atom's hfs state can be calculated 
+           with self.V() (sequence of potentials if atoms is a sequence of atoms).
         
            Args:
                lasers: Laser or sequence of lasers.
-               atom: Atom object representing the atom for which the potential is to be generated. Default is None.
+               atoms: Atom object representing the atom for which the potential is to be generated. Can either be
+                      single atom or sequence of atoms. Default is None.
         """
         self.lasers = lasers
-        self.atom = atom
+        self.atoms = atoms
         self._check_input("init")
 
+        self.x = None
+        self.y = None
+        self.z = None
+        self.Es = [None]*len(self.lasers) # E-field amplitudes for each laser at the position (x,y,z)
 
 
     def V(
@@ -40,7 +46,10 @@ class LaserSetup(object):
             y: Union[float, Sequence[float], np.ndarray, u.Quantity], 
             z: Union[float, Sequence[float], np.ndarray, u.Quantity],
     ) -> u.Quantity:
-        """Returns the potential of the `atom` in its hfs state given the light field of the `lasers` at the position (x,y,z) in [h x MHz]. 
+        """Returns the potential of the `atoms` in their hfs state given the light field of the `lasers` at the position (x,y,z) in [h x MHz]. 
+           If `atoms` just has a single atom, the potential is returned as a single u.Quantity of same shape as (x,y,z). If `atoms` is a sequence 
+           of atoms, then a list of u.Quantity is returned, each element of the list corresponding to the potential of the respective atom in the
+           sequence.
            Here, x, y, z are the global standard Carteesian coordinates in [um] and can be either float or array obtained from np.meshgrid().
 
            Args:
@@ -51,34 +60,58 @@ class LaserSetup(object):
            Returns:
                 u.Quantity: Potential of the `atom` in its hfs state given the light field of the `lasers` at the position (x,y,z) in [h x MHz].
         """
-        F = self.atom.hfs_state['F']
-        mF = self.atom.hfs_state['mF']
+        self.x_tmp = x
+        self.y_tmp = y
+        self.z_tmp = z
+        self._check_input('V')
 
-        # Add the potential from each laser to the total potential
-        V = 0 * u.MHz # in [h x MHz]
+        # List of potentials for each atom in the sequence of atoms
+        Vs = []
 
-        for laser in self.lasers:
-            # Calculate the electric field amplitude of the laser at the position (x,y,z)
-            print(f'Calculating electric field amplitude of laser {laser.name}...')
-            E_squared = np.real(laser.E(x, y, z) * np.conj(laser.E(x, y, z))) # this is real anyways, just get rid of complex cast warnings
+        for atom in self.atoms:
+            F = atom.hfs_state['F']
+            mF = atom.hfs_state['mF']
 
-            # Calculate the polarizabilities of the atom in the hfs state for the laser frequency
-            print(f'Calculating polarizability of hfs state {self.atom.hfs_state} at λ={laser.lambda_}...')
-            alpha_s = self.atom.scalar_hfs_polarizability(laser.omega)
-            alpha_v = self.atom.vector_hfs_polarizability(laser.omega)
-            alpha_t = self.atom.tensor_hfs_polarizability(laser.omega)
+            # Add the potential from each laser to the total potential of the atom
+            V = 0 * u.MHz # in [h x MHz]
+            for i, laser in enumerate(self.lasers):
+                # Calculate the electric field amplitude of the laser at the position (x,y,z)
+                if self.x is None or self.y is None or self.z is None:
+                    print(f'Calculating electric field amplitude of laser {laser.name}...')
+                    E = laser.E(self.x_tmp, self.y_tmp, self.z_tmp)
+                    self.Es[i] = E
+                elif not np.allclose(self.x, self.x_tmp) or not np.allclose(self.y, self.y_tmp) or not np.allclose(self.z, self.z_tmp):
+                    print(f'Calculating electric field amplitude of laser {laser.name}...')
+                    E = laser.E(self.x_tmp, self.y_tmp, self.z_tmp)
+                    self.Es[i] = E
+                E_squared = np.real(self.Es[i] * np.conj(self.Es[i])) # this is real anyways, just get rid of complex cast warnings
 
-            # Calculate the coefficients, equation (20) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
-            if laser.pol_vec_3d is not None:
-                C = np.real(2 * np.imag(np.conj(laser.pol_vec_3d[0]) * laser.pol_vec_3d[1])) # this is real anyways, just get rid of complex cast warnings
-                D = np.real(1 - 3*np.conj(laser.pol_vec_3d[2]) * laser.pol_vec_3d[2]) # this is real anyways, just get rid of complex cast warnings
-            else:
-                raise ValueError("The potential can only be calculated if all lasers have a specified pol_vec_3d.")
-            
-            # Calculate the potential, equation (19) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
-            V = V + (-1/4 * E_squared * (alpha_s + C*alpha_v*mF/(2*F) - D*alpha_t*(3*mF**2 - F*(F+1)) / (2*F*(2*F-1)))).to(u.MHz)
+                # Calculate the polarizabilities of the atom in the hfs state for the laser frequency
+                print(f'Calculating polarizability of hfs state {atom.hfs_state} at λ={laser.lambda_}...')
+                alpha_s = atom.scalar_hfs_polarizability(laser.omega)
+                alpha_v = atom.vector_hfs_polarizability(laser.omega)
+                alpha_t = atom.tensor_hfs_polarizability(laser.omega)
 
-        return V
+                # Calculate the coefficients, equation (20) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
+                if laser.pol_vec_3d is not None:
+                    C = np.real(2 * np.imag(np.conj(laser.pol_vec_3d[0]) * laser.pol_vec_3d[1])) # this is real anyways, just get rid of complex cast warnings
+                    D = np.real(1 - 3*np.conj(laser.pol_vec_3d[2]) * laser.pol_vec_3d[2]) # this is real anyways, just get rid of complex cast warnings
+                else:
+                    raise ValueError("The potential can only be calculated if all lasers have a specified pol_vec_3d.")
+                
+                # Calculate the potential, equation (19) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
+                V = V + (-1/4 * E_squared * (alpha_s + C*alpha_v*mF/(2*F) - D*alpha_t*(3*mF**2 - F*(F+1)) / (2*F*(2*F-1)))).to(u.MHz)
+
+            # Append the potential of the atom and set the position, such that the electric field is not recalculated
+            Vs.append(V)
+            self.x = self.x_tmp
+            self.y = self.y_tmp
+            self.z = self.z_tmp
+
+        if len(Vs) == 1:
+            return Vs[0]
+        else:
+            return Vs
 
 
 
@@ -192,8 +225,48 @@ class LaserSetup(object):
 
 
             # Check atom
-            if self.atom is not None and not isinstance(self.atom, Atom):
-                raise TypeError(f"atom must be an instance of Atom, not {type(self.atom)}")
+            if self.atoms is not None:
+                if isinstance(self.atoms, (Atom, Sequence, np.ndarray)):
+                    if isinstance(self.atoms, (Sequence, np.ndarray)):
+                        for i, atom in enumerate(self.atoms):
+                            if not isinstance(atom, Atom):
+                                raise TypeError(f"atoms must be an instance of Atom, not {type(atom)}")
+                    elif isinstance(self.atoms, Atom):
+                        self.atoms = [self.atoms]
+                else:
+                    raise TypeError(f"atom must be an instance of Atom or sequence of Atoms, not {type(self.atom)}")
+            
+
+        if method == 'V':
+            # Check x
+            if isinstance(self.x_tmp, (float, int)):
+                self.x_tmp = np.array([self.x_tmp]) * u.um
+            elif isinstance(self.x_tmp, (Sequence, np.ndarray)) and not isinstance(self.x_tmp, u.Quantity):
+                self.x_tmp = np.asarray(self.x_tmp) * u.um
+            elif isinstance(self.x_tmp, u.Quantity) and self.x_tmp.unit.is_equivalent(u.um):
+                self.x_tmp = (np.atleast_1d(self.x_tmp.value) * self.x_tmp.unit).to(u.um)
+            else:
+                raise TypeError('The x-coordinate must be an astropy.Quantity or float or sequence of floats.')
+            
+            # Check y
+            if isinstance(self.y_tmp, (float, int)):
+                self.y_tmp = np.array([self.y_tmp]) * u.um
+            elif isinstance(self.y_tmp, (Sequence, np.ndarray)) and not isinstance(self.y_tmp, u.Quantity):
+                self.y_tmp = np.asarray(self.y_tmp) * u.um
+            elif isinstance(self.y_tmp, u.Quantity) and self.y_tmp.unit.is_equivalent(u.um):
+                self.y_tmp = (np.atleast_1d(self.y_tmp.value) * self.y_tmp.unit).to(u.um)
+            else:
+                raise TypeError('The y-coordinate must be an astropy.Quantity or float or sequence of floats.')
+            
+            # Check z
+            if isinstance(self.z_tmp, (float, int)):
+                self.z_tmp = np.array([self.z_tmp]) * u.um
+            elif isinstance(self.z_tmp, (Sequence, np.ndarray)) and not isinstance(self.z_tmp, u.Quantity):
+                self.z_tmp = np.asarray(self.z_tmp) * u.um
+            elif isinstance(self.z_tmp, u.Quantity) and self.z_tmp.unit.is_equivalent(u.um):
+                self.z_tmp = (np.atleast_1d(self.z_tmp.value) * self.z_tmp.unit).to(u.um)
+            else:
+                raise TypeError('The z-coordinate must be an astropy.Quantity or float or sequence of floats.')
             
 
 
