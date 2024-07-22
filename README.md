@@ -14,7 +14,7 @@ You can set up LightMat by either cloning the GitHub repository and either setti
 
 ### Clone the GitHub Repository
 ```bash
-git clone [https://github.com/yourusername/LightMat.git](https://github.com/lightmat/lightmat.git)
+git clone https://github.com/lightmat/lightmat.git
 cd LightMat
 ```
 
@@ -33,38 +33,13 @@ pip install -r requirements.txt
 
 ## Usage
 
-Here's a basic example of how to use LightMat:
-
-```python
-import lightmat as lm
-
-# Example code to calculate the trap depth
-trap_depth = lm.calculate_trap_depth(laser_parameters)
-print(f"Trap Depth: {trap_depth}")
-
-# Example code to calculate the differential light shift
-light_shift = lm.calculate_differential_light_shift(atom_parameters)
-print(f"Differential Light Shift: {light_shift}")
-
-# Example code to plot the potential
-lm.plot_potential(laser_parameters, atom_parameters)
-```
-
-For detailed usage and examples, please refer to the documentation.
+There can be found a tutorial jupyter notebook for the potential calculation of a single hyperfine atom in the light field of some lasers and another tutorial notebook for the density calculation of an atomic gas in an arbitrary external potential.
 
 ## Contributing
 
 If you find any bugs or have suggestions for improvements, please open an issue on GitHub.
 
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
 ## Contact
 
 For any questions or inquiries, please contact:
 - **Email**: [l.p.bleiziffer@gmail.com](mailto:l.p.bleiziffer@gmail.com)
-
-## Acknowledgments
-
-We appreciate contributions and feedback from the community to make LightMat better.
