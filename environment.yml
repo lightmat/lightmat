@@ -1,4 +1,4 @@
-name: lightmatter
+name: lightmat
 channels:
   - conda-forge
   - defaults
@@ -36,7 +36,6 @@ dependencies:
   - hypre=2.24.0=mpi_mpich_h0faba72_0
   - icu=70.1=h27087fc_0
   - ipykernel=6.26.0=pyhf8b6a83_0
-  - ipython=8.17.2=pyh41d4057_0
   - jedi=0.19.1=pyhd8ed1ab_0
   - jupyter_client=7.3.4=pyhd8ed1ab_0
   - jupyter_core=5.5.0=py310hff52083_0
@@ -130,6 +129,9 @@ dependencies:
       - apptools==5.2.1
       - astropy==5.3.4
       - attrs==23.2.0
+      - backcall==0.2.0
+      - beautifulsoup4==4.12.3
+      - bleach==6.1.0
       - blosc2==2.4.0
       - cattrs==23.2.3
       - certifi==2023.11.17
@@ -142,16 +144,23 @@ dependencies:
       - cubature==0.17.2
       - cycler==0.12.1
       - cython==3.0.7
+      - defusedxml==0.7.1
+      - docopt==0.6.2
       - envisage==7.0.3
       - exceptiongroup==1.2.0
+      - fastjsonschema==2.20.0
       - fenics==2019.1.0
       - fenics-ffc==2019.1.0.post0
       - fjson==0.1.6
       - fonttools==4.50.0
       - idna==3.6
+      - ipython==8.12.3
       - ipywidgets==8.1.2
       - jax==0.4.23
       - jinja2==3.1.3
+      - jsonschema==4.23.0
+      - jsonschema-specifications==2023.12.1
+      - jupyterlab-pygments==0.3.0
       - jupyterlab-widgets==3.0.10
       - kiwisolver==1.4.5
       - llvmlite==0.41.1
@@ -162,8 +171,12 @@ dependencies:
       - mayavi==4.8.1
       - mdurl==0.1.2
       - meshio==5.3.4
+      - mistune==3.0.2
       - ml-dtypes==0.3.1
       - msgpack==1.0.7
+      - nbclient==0.10.0
+      - nbconvert==7.16.4
+      - nbformat==5.10.4
       - ndim==0.1.16
       - ndindex==1.7
       - networkx==3.2.1
@@ -176,7 +189,9 @@ dependencies:
       - orthopy==0.9.8
       - packaging==24.0
       - pandas==2.1.3
+      - pandocfilters==1.5.1
       - pillow==10.2.0
+      - pipreqs==0.5.0
       - platformdirs==4.1.0
       - polarization==1.0.4
       - pooch==1.8.0
@@ -201,17 +216,21 @@ dependencies:
       - pyyaml==6.0.1
       - quadpy==0.16.19
       - qutip==4.7.3
+      - referencing==0.35.1
       - requests==2.31.0
       - requests-cache==1.1.1
       - rich==13.7.0
       - rich-argparse==1.4.0
+      - rpds-py==0.19.0
       - scipy==1.11.4
       - scooby==0.9.2
       - seaborn==0.13.0
       - sfepy==2023.4
       - shiboken2==5.15.2.1
+      - soupsieve==2.5
       - sparse==0.14.0
       - tables==3.9.2
+      - tinycss2==1.3.0
       - tomli==2.0.1
       - tomli-w==1.0.0
       - tqdm==4.66.1
@@ -222,6 +241,8 @@ dependencies:
       - url-normalize==1.4.3
       - urllib3==2.1.0
       - vtk==9.2.6
+      - webencodings==0.5.1
       - widgetsnbextension==4.0.10
       - x21==0.4.25
+      - yarg==0.1.9
 prefix: /home/lelo/anaconda3/envs/lightmatter

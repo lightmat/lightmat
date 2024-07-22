@@ -38,26 +38,29 @@ class ParticleProps:
             N_particles: int, 
             T: Union[float, Quantity],
             domain: Union[Sequence[float], Sequence[Sequence[float]], np.ndarray, Quantity],
-            V_trap: Union[Callable, np.ndarray, Quantity], 
+            V_trap_func: Union[Callable, None],
+            V_trap_array: Union[np.ndarray, Quantity, None] = None, 
             a_s: Union[float, Quantity, None] = None,
             name: str = "Particle",
-            **V_trap_kwargs,
+            **V_trap_func_kwargs,
         ):
-        """Initializes the ParticleProps class.
+        """Initializes the ParticleProps class. Either provide a callable V_trap_func or a 3d array V_trap_array for the 
+           potential.
         
            Args:
-               species (str): Type of the particle, either 'fermion' or 'boson'.
-               m (Quantity or float): Mass of the particle, in [kg].
-               N_particles (int): Number of particles in the system.
-               T (Quantity or float): Temperature of the system, in [nK].
-               domain (Sequence, np.ndarray, or Quantity): Spatial domain of the system. Either a sequence of length 2
-                                                           containing the same x,y,z domain, or a sequence of length 3
-                                                           containing sequences of length 2 containing the x,y,z domain
-                                                           in [um].
-               V_trap (Callable): Function that returns the trapping potential of the system at given position(s).
+               species: Type of the particle, either 'fermion' or 'boson'.
+               m: Mass of the particle, in [kg].
+               N_particles: Number of particles in the system.
+               T: Temperature of the atomic gas, in [nK].
+               domain: Spatial domain of the system. Either a sequence of length 2 containing the same x,y,z domain, 
+                       or a sequence of length 3 containing sequences of length 2 containing the x,y,z domain in [um].
+               V_trap_func: Function that returns the trapping potential of the system at given position(s) in [kB x nK]. 
+                            This will be used if V_trap_array is not provided. Defaults to None.
+               V_trap_array: 3d array containing the trapping potential of the system at given position(s) in [kB x nK]. 
+                             This will be used if no V_trap_func is provided. Defaults to None.
                a_s (Quantity or float, optional): s-wave scattering length of the particles in [m].
                name (str): Name of the particle.
-               **V_trap_kwargs: Keyword arguments to pass to V_trap.
+               **V_trap_func_kwargs: Keyword arguments to pass to V_trap_func.
         """
         #Name
         if isinstance(name, str):
@@ -130,12 +133,14 @@ class ParticleProps:
         
         
         # Trap potential
-        if isinstance(V_trap, Callable):
-            self._V_trap = V_trap
-            self._V_trap_kwargs = V_trap_kwargs
-            self.V_trap.__func__.__doc__ = V_trap.__doc__
-        elif isinstance(V_trap, np.ndarray):
-            raise NotImplementedError("V_trap must be a callable.")
+        if isinstance(V_trap_func, Callable):
+            self._V_trap_func = V_trap_func
+            self._V_trap_func_kwargs = V_trap_func_kwargs
+            self.V_trap_func.__func__.__doc__ = V_trap_func.__doc__
+        elif isinstance(V_trap_array, Quantity) and V_trap_array.unit.is_equivalent(u.nK):
+            pass
+        elif V_trap_func is not None:
+            raise TypeError("V_trap_func must be a callable or None.")
 
         # s-wave scattering length
         if self.species == "fermion":
@@ -159,16 +164,16 @@ class ParticleProps:
         else:
             self.g = ((4*np.pi*(hbar**2)*self.a_s/self.m) / k_B).to(u.nK * u.um**3) 
 
-        # V_trap_kwargs
-        for key, value in V_trap_kwargs.items():
+        # V_trap_func_kwargs
+        for key, value in V_trap_func_kwargs.items():
             setattr(self, key, value)
 
 
-    def V_trap(self, *args):
+    def V_trap_func(self, *args):
         """
         Calculates the trap potential at given position(s).
 
-        This method acts as a wrapper around the trap potential function ('V_trap') 
+        This method acts as a wrapper around the trap potential function ('V_trap_func') 
         passed during instantiation. 
 
         Parameters:
@@ -177,7 +182,7 @@ class ParticleProps:
         Returns:
             The value of the trap potential at the given position(s).
         """
-        return self._V_trap(*args, **self._V_trap_kwargs)
+        return self._V_trap_func(*args, **self._V_trap_func_kwargs)
     
 
     def print_props(self,):
@@ -192,7 +197,7 @@ class ParticleProps:
             print(f"s-wave scattering length: {self.a_s}")
         if self.g is not None:
             print(f"Contact interaction strength: {self.g}")
-        print(f"Trap potential: {self._V_trap.__name__}")
+        print(f"Trap potential: {self._V_trap_func.__name__}")
 
 
     def plot_V_trap(
@@ -217,7 +222,7 @@ class ParticleProps:
         y = np.linspace(self.domain[1,0].value, self.domain[1,1].value, num_grid_points) 
         z = np.linspace(self.domain[2,0].value, self.domain[2,1].value, num_grid_points) 
         X, Y, Z = np.meshgrid(x, y, z, indexing="ij")
-        V_trap_result = self.V_trap(X, Y, Z)
+        V_trap_result = self.V_trap_func(X, Y, Z)
         if isinstance(V_trap_result, Quantity):
             V_trap_result = V_trap_result.to(u.nK).value
 

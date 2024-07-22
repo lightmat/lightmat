@@ -98,7 +98,7 @@ class FermiGas:
         self._check_and_process_input("init")
 
         # Initialize the external trapping potential
-        self.V_trap_array = self.spatial_basis_set.get_coeffs(self.particle_props.V_trap)
+        self.V_trap_array = self.spatial_basis_set.get_coeffs(self.particle_props.V_trap_func)
         if isinstance(self.V_trap_array, Quantity):
             if self.V_trap_array.unit.is_equivalent(u.nK):
                 self.V_trap_array = self.V_trap_array.to(u.nK)
@@ -669,11 +669,11 @@ class FermiGas:
             for i in range(3):
                 ax2 = axs[i].twinx()  # Create a secondary y-axis for potential
                 if i == 0:
-                    line1 = ax2.plot(x, self.particle_props.V_trap(x, 0, 0), 'r--', label=r'$V_{trap}$')  
+                    line1 = ax2.plot(x, self.particle_props.V_trap_func(x, 0, 0), 'r--', label=r'$V_{trap}$')  
                 elif i == 1:
-                    ax2.plot(y, self.particle_props.V_trap(0, y, 0), 'r--', label=r'$V_{trap}$')
+                    ax2.plot(y, self.particle_props.V_trap_func(0, y, 0), 'r--', label=r'$V_{trap}$')
                 elif i == 2:
-                    ax2.plot(z, self.particle_props.V_trap(0, 0, z), 'r--', label=r'$V_{trap}$')
+                    ax2.plot(z, self.particle_props.V_trap_func(0, 0, z), 'r--', label=r'$V_{trap}$')
                 
                 ax2.set_ylabel(r'$V_{trap} \; \left[ nK \right]$', color='r', fontsize=14)  
                 ax2.tick_params(axis='y', labelcolor='r')  
@@ -824,7 +824,7 @@ class FermiGas:
             elif isinstance(self.spatial_basis_set, str):
                 if self.spatial_basis_set == 'grid':
                     num_grid_points = self.basis_set_kwargs.get('num_grid_points', 101) 
-                    potential_function = self.basis_set_kwargs.get('potential_function', self.particle_props.V_trap)
+                    potential_function = self.basis_set_kwargs.get('potential_function', self.particle_props.V_trap_func)
                     self.spatial_basis_set = GridSpatialBasisSet(
                         self.particle_props.domain, 
                         num_grid_points,
