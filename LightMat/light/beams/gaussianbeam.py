@@ -97,7 +97,6 @@ class GaussianBeam(Beam):
             pol_Jones_vec: Union[str, Sequence[float]] = 'linear horizontal',
             z0: Union[u.Quantity, float] = 0 * u.um,
             name: str = "GaussianBeam",
-            color: str = None,
     ) -> None:
         """Initializes a GaussianBeam instance.
         
@@ -127,7 +126,6 @@ class GaussianBeam(Beam):
         self.pol_Jones_vec = pol_Jones_vec
         self.z0 = z0
         self.name = name
-        self.color = color
         self._check_input('init')
 
         # Calculate derived attributes
