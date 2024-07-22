@@ -22,8 +22,9 @@ cd LightMat
 To set up the conda environment, run:
 ```bash
 conda env create -f environment.yml
-conda activate lightmat-env
+conda activate lightmat
 ```
+After this step, the lightmat environment can also be selected as python kernel in a jupyter notebook, for example in the tutorial notebooks.
 
 ### Using Pip
 To install the necessary packages via pip, run:
