@@ -14,7 +14,7 @@ You can set up LightMat by either cloning the GitHub repository and either setti
 
 ### Clone the GitHub Repository
 ```bash
-git clone https://github.com/yourusername/LightMat.git
+git clone [https://github.com/yourusername/LightMat.git](https://github.com/lightmat/lightmat.git)
 cd LightMat
 ```
 
