@@ -1,5 +1,5 @@
 import astropy.units as u
-from astropy.constants import hbar, c, eps0, e, a0, h, hbar
+from astropy.constants import hbar, c, eps0, e, a0, h, hbar, k_B
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -45,8 +45,10 @@ class LaserSetup(object):
             x: Union[float, Sequence[float], np.ndarray, u.Quantity], 
             y: Union[float, Sequence[float], np.ndarray, u.Quantity], 
             z: Union[float, Sequence[float], np.ndarray, u.Quantity],
+            unit: u.Unit = u.MHz,
     ) -> u.Quantity:
-        """Returns the potential of the `atoms` in their hfs state given the light field of the `lasers` at the position (x,y,z) in [h x MHz]. 
+        """Returns the potential of the `atoms` in their hfs state given the light field of the `lasers` at the position (x,y,z) in [h x MHz],
+           or in [kB x nK] or in [eV] depending on ``unit``. 
            If `atoms` just has a single atom, the potential is returned as a single u.Quantity of same shape as (x,y,z). If `atoms` is a sequence 
            of atoms, then a list of u.Quantity is returned, each element of the list corresponding to the potential of the respective atom in the
            sequence.
@@ -56,13 +58,16 @@ class LaserSetup(object):
                 x: Global standard Carteesian coordinate in [um].
                 y: Global standard Carteesian coordinate in [um].
                 z: Global standard Carteesian coordinate in [um].
+                unit: Unit of the potential. Must be one of [u.MHz, u.uK, u.eV]. Default is u.MHz.
 
            Returns:
-                u.Quantity: Potential of the `atom` in its hfs state given the light field of the `lasers` at the position (x,y,z) in [h x MHz].
+                u.Quantity: Potential of the `atom` in its hfs state given the light field of the `lasers` at the position (x,y,z) in [h x MHz],
+                            or in [kB x nK] or in [eV] depending on ``unit``. .
         """
         self.x_tmp = x
         self.y_tmp = y
         self.z_tmp = z
+        self.unit = unit
         self._check_input('V')
 
         # List of potentials for each atom in the sequence of atoms
@@ -76,11 +81,9 @@ class LaserSetup(object):
             V = 0 * u.MHz # in [h x MHz]
             for i, laser in enumerate(self.lasers):
                 # Calculate the electric field amplitude of the laser at the position (x,y,z)
-                if self.x is None or self.y is None or self.z is None:
-                    print(f'Calculating electric field amplitude of laser {laser.name}...')
-                    E = laser.E(self.x_tmp, self.y_tmp, self.z_tmp)
-                    self.Es[i] = E
-                elif not np.allclose(self.x, self.x_tmp) or not np.allclose(self.y, self.y_tmp) or not np.allclose(self.z, self.z_tmp):
+                if (self.x is None or self.y is None or self.z is None) or \
+                   (not np.allclose(self.x, self.x_tmp) or not np.allclose(self.y, self.y_tmp) or not np.allclose(self.z, self.z_tmp)) or \
+                   (self.x.shape != self.x_tmp.shape or self.y.shape != self.y_tmp.shape or self.z.shape != self.z_tmp.shape):
                     print(f'Calculating electric field amplitude of laser {laser.name}...')
                     E = laser.E(self.x_tmp, self.y_tmp, self.z_tmp)
                     self.Es[i] = E
@@ -88,9 +91,9 @@ class LaserSetup(object):
 
                 # Calculate the polarizabilities of the atom in the hfs state for the laser frequency
                 print(f'Calculating polarizability of hfs state {atom.hfs_state} at λ={laser.lambda_}...')
-                alpha_s = atom.scalar_hfs_polarizability(laser.omega)
-                alpha_v = atom.vector_hfs_polarizability(laser.omega)
-                alpha_t = atom.tensor_hfs_polarizability(laser.omega)
+                alpha_s = atom.scalar_hfs_polarizability(omega_laser=laser.omega)
+                alpha_v = atom.vector_hfs_polarizability(omega_laser=laser.omega)
+                alpha_t = atom.tensor_hfs_polarizability(omega_laser=laser.omega)
 
                 # Calculate the coefficients, equation (20) in http://dx.doi.org/10.1140/epjd/e2013-30729-x
                 if laser.pol_vec_3d is not None:
@@ -103,15 +106,18 @@ class LaserSetup(object):
                 V = V + (-1/4 * E_squared * (alpha_s + C*alpha_v*mF/(2*F) - D*alpha_t*(3*mF**2 - F*(F+1)) / (2*F*(2*F-1)))).to(u.MHz)
 
             # Append the potential of the atom and set the position, such that the electric field is not recalculated
-            Vs.append(V)
+            Vs.append(V.value) # in [h x MHz]
             self.x = self.x_tmp
             self.y = self.y_tmp
             self.z = self.z_tmp
 
-        if len(Vs) == 1:
-            return Vs[0]
-        else:
-            return Vs
+        Vs = np.asarray(Vs) * u.MHz
+        if unit == u.nK:
+            Vs = (Vs * h / k_B).to(u.nK)
+        elif unit == u.eV:
+            Vs = (Vs * h).to(u.eV)
+
+        return np.squeeze(Vs) # in [h x MHz], [kB x nK] or [eV]. Return as scalar if only one atom and as array if sequence of atoms
 
 
 
@@ -268,5 +274,17 @@ class LaserSetup(object):
             else:
                 raise TypeError('The z-coordinate must be an astropy.Quantity or float or sequence of floats.')
             
+
+            # Check unit
+            if not isinstance(self.unit, u.Unit):
+                raise TypeError('unit must be an astropy.Unit.')
+            elif not self.unit.is_equivalent(u.MHz) and not self.unit.is_equivalent(u.uK) and not self.unit.is_equivalent(u.eV):
+                raise ValueError('unit must be one of [u.MHz, u.uK, u.eV].')
+            elif self.unit.is_equivalent(u.MHz):
+                self.unit = u.MHz
+            elif self.unit.is_equivalent(u.nK):
+                self.unit = u.nK
+            elif self.unit.is_equivalent(u.eV):
+                self.unit = u.eV
 
 

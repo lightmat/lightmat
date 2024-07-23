@@ -245,4 +245,4 @@ dependencies:
       - widgetsnbextension==4.0.10
       - x21==0.4.25
       - yarg==0.1.9
-prefix: /home/lelo/anaconda3/envs/lightmatter
+

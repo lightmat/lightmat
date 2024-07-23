@@ -13,11 +13,12 @@ from typing import Union
 
 from .particle_props import ParticleProps
 from .spatial_basis import SpatialBasisSet, GridSpatialBasisSet
+from .gas import Gas
 
 
 # TODO: Include overlap of basis in functional energy minimization calculation! For grid it's fine like this but not in general.
 
-class BoseGas:
+class BoseGas(Gas):
     """
     Class for the calculation of the density of a Bose gas in a given arbitrary external trapping potential. Positions r are
     assumed to be in units of [um]. The density is in units of [1/um**3]. The temperature and energy is in units of [nK]. 
@@ -111,6 +112,19 @@ class BoseGas:
         else:
             self.V_trap_array *= u.nK
         
+        # Initialize the Gas() parameters TODO: This needs to be generalized for arbitrary spatial basis sets, not only grid
+        nx = len(self.spatial_basis_set.grid_points_x)
+        ny = len(self.spatial_basis_set.grid_points_y)
+        nz = len(self.spatial_basis_set.grid_points_z)
+        super().__init__(
+            self.particle_props,
+            self.V_trap_array.reshape((nx, ny, nz)),
+            self.spatial_basis_set.grid_points_x, 
+            self.spatial_basis_set.grid_points_y,
+            self.spatial_basis_set.grid_points_z,
+        )
+
+
         # Initilize the chemical potential using the TF approximation. In principle this would give:
         # mu(r) = V(r) + g*(n0(r) + 2*n_ex(r))
         # But we don't want a position-dependent mu, so as an initial guess we take:

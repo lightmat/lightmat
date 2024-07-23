@@ -42,7 +42,8 @@ class Atom(object):
 
     def scalar_hfs_polarizability(
             self,
-            omega_laser: Union[u.Quantity, float],
+            omega_laser: Union[u.Quantity, float, Sequence[float], np.ndarray, None] = None,
+            lambda_laser: Union[u.Quantity, float, Sequence[float], np.ndarray, None] = None,
     ) -> u.Quantity:
         """Calculate the scalar polarizability of the provided hfs state of the atom (equation (18) in 
            http://dx.doi.org/10.1140/epjd/e2013-30729-x).
@@ -50,11 +51,17 @@ class Atom(object):
            Args:
                omega_laser: Laser frequency for which the the polarizability is to be calculated. If float, it
                             is assumed to be in [hbar x THz], if u.Quantity, it must be in unit equivalent to [Hz].
+                            Can either be scalar or sequence. Defaults to None.
+               lambda_laser: Alternatively, the laser wavelength can be provided. If float, it is assumed to be in [nm],
+                             if u.Quantity, it must be in unit equivalent to [nm]. Can either be scalar or sequence.
+                             Defaults to None.
                        
            Returns:
-               u.Quantity: The scalar polarizability of the atomic hfs state in [h x Hz / (V/m)^2].
+               u.Quantity: The scalar polarizability of the atomic hfs state in [h x Hz / (V/m)^2] in same shape as omega_laser
+                           or lambda_laser.
         """
         self.omega_laser = omega_laser
+        self.lambda_laser = lambda_laser
         self._check_input('polarizability')
 
         J = self.hfs_state['J']
@@ -70,7 +77,8 @@ class Atom(object):
 
     def vector_hfs_polarizability(
             self,
-            omega_laser: Union[u.Quantity, float],
+            omega_laser: Union[u.Quantity, float, Sequence[float], np.ndarray, None] = None,
+            lambda_laser: Union[u.Quantity, float, Sequence[float], np.ndarray, None] = None,
     ) -> u.Quantity:
         """Calculate the vector polarizability of the provided hfs state of the atom (equation (18) in 
            http://dx.doi.org/10.1140/epjd/e2013-30729-x).
@@ -78,11 +86,17 @@ class Atom(object):
            Args:
                omega_laser: Laser frequency for which the the polarizability is to be calculated. If float, it
                             is assumed to be in [hbar x THz], if u.Quantity, it must be in unit equivalent to [Hz].
+                            Can either be scalar or sequence. Defaults to None.
+               lambda_laser: Alternatively, the laser wavelength can be provided. If float, it is assumed to be in [nm],
+                             if u.Quantity, it must be in unit equivalent to [nm]. Can either be scalar or sequence.
+                             Defaults to None.
                        
            Returns:
-               u.Quantity: The vector polarizability of the atomic hfs state in [h x Hz / (V/m)^2].
+               u.Quantity: The vector polarizability of the atomic hfs state in [h x Hz / (V/m)^2] in same shape as omega_laser
+                           or lambda_laser.
         """
         self.omega_laser = omega_laser
+        self.lambda_laser = lambda_laser
         self._check_input('polarizability')
         
         J = self.hfs_state['J']
@@ -101,7 +115,8 @@ class Atom(object):
 
     def tensor_hfs_polarizability(
             self,
-            omega_laser: Union[u.Quantity, float],
+            omega_laser: Union[u.Quantity, float, Sequence[float], np.ndarray, None] = None,
+            lambda_laser: Union[u.Quantity, float, Sequence[float], np.ndarray, None] = None,
     ) -> u.Quantity:
         """Calculate the tensor polarizability of the provided hfs state of the atom (equation (18) in 
            http://dx.doi.org/10.1140/epjd/e2013-30729-x).
@@ -109,11 +124,17 @@ class Atom(object):
            Args:
                omega_laser: Laser frequency for which the the polarizability is to be calculated. If float, it
                             is assumed to be in [hbar x THz], if u.Quantity, it must be in unit equivalent to [Hz].
+                            Can either be scalar or sequence. Defaults to None.
+               lambda_laser: Alternatively, the laser wavelength can be provided. If float, it is assumed to be in [nm],
+                             if u.Quantity, it must be in unit equivalent to [nm]. Can either be scalar or sequence.
+                             Defaults to None.
                        
            Returns:
-               u.Quantity: The tensor polarizability of the atomic hfs state in [h x Hz / (V/m)^2].
+               u.Quantity: The tensor polarizability of the atomic hfs state in [h x Hz / (V/m)^2] in same shape as omega_laser
+                           or lambda_laser.
         """
         self.omega_laser = omega_laser
+        self.lambda_laser = lambda_laser
         self._check_input('polarizability')
 
         J = self.hfs_state['J']
@@ -346,8 +367,23 @@ class Atom(object):
                     raise ValueError("omega_laser must be in unit equivalent to [Hz].")
             elif isinstance(self.omega_laser, float):
                 self.omega_laser = self.omega_laser * u.THz
-            else:
+            elif isinstance(self.omega_laser, (Sequence, np.ndarray)):
+                self.omega_laser = np.asarray(self.omega_laser) * u.THz
+            elif self.omega_laser is not None:
                 raise TypeError("omega_laser must be a float or u.Quantity.")
+            
+            # Check lambda_laser
+            if isinstance(self.lambda_laser, u.Quantity):
+                if not self.lambda_laser.unit.is_equivalent(u.nm):
+                    raise ValueError("lambda_laser must be in unit equivalent to [nm].")
+            elif isinstance(self.lambda_laser, float):
+                self.lambda_laser = self.lambda_laser * u.nm
+            elif isinstance(self.lambda_laser, (Sequence, np.ndarray)):
+                self.lambda_laser = np.asarray(self.lambda_laser) * u.nm
+            elif self.lambda_laser is not None:
+                raise TypeError("lambda_laser must be a float or u.Quantity.")
+            
+            self.omega_laser = self.omega_laser if self.omega_laser is not None else 2 * np.pi * c / self.lambda_laser
             
             # Check K
             if method == 'polarizability_reduced':

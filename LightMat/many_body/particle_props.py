@@ -38,8 +38,7 @@ class ParticleProps:
             N_particles: int, 
             T: Union[float, Quantity],
             domain: Union[Sequence[float], Sequence[Sequence[float]], np.ndarray, Quantity],
-            V_trap_func: Union[Callable, None],
-            V_trap_array: Union[np.ndarray, Quantity, None] = None, 
+            V_trap_func: Union[Callable],
             a_s: Union[float, Quantity, None] = None,
             name: str = "Particle",
             **V_trap_func_kwargs,
@@ -55,9 +54,7 @@ class ParticleProps:
                domain: Spatial domain of the system. Either a sequence of length 2 containing the same x,y,z domain, 
                        or a sequence of length 3 containing sequences of length 2 containing the x,y,z domain in [um].
                V_trap_func: Function that returns the trapping potential of the system at given position(s) in [kB x nK]. 
-                            This will be used if V_trap_array is not provided. Defaults to None.
-               V_trap_array: 3d array containing the trapping potential of the system at given position(s) in [kB x nK]. 
-                             This will be used if no V_trap_func is provided. Defaults to None.
+                            This will be used if V_trap_array is not provided.
                a_s (Quantity or float, optional): s-wave scattering length of the particles in [m].
                name (str): Name of the particle.
                **V_trap_func_kwargs: Keyword arguments to pass to V_trap_func.
@@ -132,15 +129,15 @@ class ParticleProps:
                             "sequences of length 2")
         
         
-        # Trap potential
+        # Trap potential        
         if isinstance(V_trap_func, Callable):
             self._V_trap_func = V_trap_func
             self._V_trap_func_kwargs = V_trap_func_kwargs
             self.V_trap_func.__func__.__doc__ = V_trap_func.__doc__
-        elif isinstance(V_trap_array, Quantity) and V_trap_array.unit.is_equivalent(u.nK):
-            pass
-        elif V_trap_func is not None:
-            raise TypeError("V_trap_func must be a callable or None.")
+        else:
+            raise TypeError("V_trap_func must be a Callable")
+        
+
 
         # s-wave scattering length
         if self.species == "fermion":
