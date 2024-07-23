@@ -2,6 +2,13 @@
 
 LightMat is an easy-to-use Python module designed to calculate the light-induced potential of hyperfine atoms in the light field of arbitrary laser beams. This tool can be used to quantitatively find the trap depth of certain laser setups, calculate the differential light shift of different hyperfine levels, and perform calculations of hyperfine dynamical scalar-, vector-, and tensor-polarizabilities. Additionally, it can compute the spatial density of an atomic gas (bosons, fermions, or a mixture) in an arbitrary external trapping potential.
 
+An overview of some of the classes with some of their attributes and methods:
+![Bildschirmfoto von 2024-07-23 09-36-19](https://github.com/user-attachments/assets/61209c1d-553b-4309-beaf-e4a5c73ba7c2)
+
+**Example:** The potential of a K40 atom in its hyperfine groundstate F=9/2, mF=-9/2 in the laser field of a bowtie xy-lattice, and a 1d z-lattice with lightsheet for additional z-confinement. The interactive plot enables viewing the potential in different planes in 2d or along different directions in 1d. In the tutorial_single_atom.ipynb notebook it is shown how to set up the laser beams and atom and calculate this potential.
+![Bildschirmfoto von 2024-07-23 09-46-24](https://github.com/user-attachments/assets/5c77e3e5-d9f1-40bf-a980-6c1b8f58bf53)
+
+
 ## Features
 - **Comprehensive Calculations**: Supports calculations for hyperfine dynamical polarizabilities, light potential for arbitrary laser setups and spatial density in arbitrary potentials
 - **User-Friendly**: Intuitive and easy to use.
@@ -39,6 +46,18 @@ There can be found a tutorial jupyter notebook for the potential calculation of 
 ## Contributing
 
 If you find any bugs or have suggestions for improvements, please open an issue on GitHub.
+
+## Future Plans
+
+- **Resonant or near-detuned features**, e.g. atom trajectory under radiation pressure (for MOT or Zeeman slower calculations)​
+
+- **More beams**, e.g. Laguerre beam, Gaussian ring beam, etc.​
+
+- Possibility to add **static E- and B-fields** ​
+
+- Functionality to add **light intensity noise sampled from a camera** to the potential​
+
+- **Improved finite temperature density calculations** beyond Thomas-Fermi approximation, e.g. by implementing free energy functional minimization (Tao Shi, Eugene Demler, and J Ignacio Cirac, PRL 125(18):180602, 2020)
 
 ## Contact
 
