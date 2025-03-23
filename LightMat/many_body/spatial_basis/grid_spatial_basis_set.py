@@ -310,7 +310,7 @@ class GridSpatialBasisSet(SpatialBasisSet):
             cumulative_density = np.cumsum(density)
 
             # Determine grid point positions
-            return np.interp(np.linspace(0, 1, num_grid_points), cumulative_density, samples)
+            return np.interp(np.linspace(0, 1, num_grid_points), cumulative_density.real, samples)
 
         # Create grid points for each axis
         grid_points_x = create_grid_points(x_samples, grad_magnitude, self.num_grid_points[0]) * u.um

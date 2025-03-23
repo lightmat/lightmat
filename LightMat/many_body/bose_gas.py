@@ -104,6 +104,7 @@ class BoseGas(Gas):
 
         # Initialize the external trapping potential
         self.V_trap_array = self.spatial_basis_set.get_coeffs(self.particle_props.V_trap_func)
+        self.V_trap_array = self.V_trap_array.reshape(-1)
         if isinstance(self.V_trap_array, Quantity):
             if self.V_trap_array.unit.is_equivalent(u.nK):
                 self.V_trap_array = self.V_trap_array.to(u.nK)
@@ -793,11 +794,23 @@ class BoseGas(Gas):
             for i in range(3):
                 ax2 = axs[i].twinx()  # Create a secondary y-axis for potential
                 if i == 0:
-                    line1 = ax2.plot(x, self.particle_props.V_trap_func(x, 0, 0), 'r--', label=r'$V_{trap}$')  
+                    x_tmp = x
+                    y_tmp = np.array([0])
+                    z_tmp = np.array([0])
+                    X, Y, Z = np.meshgrid(x_tmp, y_tmp, z_tmp, indexing='ij')
+                    line1 = ax2.plot(x, self.particle_props.V_trap_func(X,Y,Z).reshape(-1), 'r--', label=r'$V_{trap}$')  
                 elif i == 1:
-                    ax2.plot(y, self.particle_props.V_trap_func(0, y, 0), 'r--', label=r'$V_{trap}$')
+                    x_tmp = np.array([0])
+                    y_tmp = y
+                    z_tmp = np.array([0])
+                    X, Y, Z = np.meshgrid(x_tmp, y_tmp, z_tmp, indexing='ij')
+                    ax2.plot(y, self.particle_props.V_trap_func(X,Y,Z).reshape(-1), 'r--', label=r'$V_{trap}$')
                 elif i == 2:
-                    ax2.plot(z, self.particle_props.V_trap_func(0, 0, z), 'r--', label=r'$V_{trap}$')
+                    x_tmp = np.array([0])
+                    y_tmp = np.array([0])
+                    z_tmp = z
+                    X, Y, Z = np.meshgrid(x_tmp, y_tmp, z_tmp, indexing='ij')
+                    ax2.plot(z, self.particle_props.V_trap_func(X,Y,Z).reshape(-1), 'r--', label=r'$V_{trap}$')
                 
                 ax2.set_ylabel(r'$V_{trap} \; \left[ nK \right]$', color='r', fontsize=14)  
                 ax2.tick_params(axis='y', labelcolor='r')  

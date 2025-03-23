@@ -1,5 +1,7 @@
 # LightMat
 
+**Warning:** Use with caution, this package is currently not actively maintained and might contain some bugs! 
+
 LightMat is an easy-to-use Python module designed to calculate the light-induced potential of hyperfine atoms in the light field of arbitrary laser beams. This tool can be used to quantitatively find the trap depth of certain laser setups, calculate the differential light shift of different hyperfine levels, and perform calculations of hyperfine dynamical scalar-, vector-, and tensor-polarizabilities. Additionally, it can compute the spatial density of an atomic gas (bosons, fermions, or a mixture) in an arbitrary external trapping potential.
 
 An overview of some of the classes with some of their attributes and methods:

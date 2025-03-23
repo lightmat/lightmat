@@ -8,11 +8,12 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from sympy.physics.wigner import wigner_3j, wigner_6j
 from typing import Union
 from collections.abc import Sequence
-from typing import Union
+from typing import Union, Tuple
 
 
 from .light import Laser, Beam
 from .matter import Atom
+from .many_body.spatial_basis import SpatialBasisSet, GridSpatialBasisSet
 
 class LaserSetup(object):
     
@@ -80,17 +81,14 @@ class LaserSetup(object):
             # Add the potential from each laser to the total potential of the atom
             V = 0 * u.MHz # in [h x MHz]
             for i, laser in enumerate(self.lasers):
-                # Calculate the electric field amplitude of the laser at the position (x,y,z)
-                if (self.x is None or self.y is None or self.z is None) or \
-                   (not np.allclose(self.x, self.x_tmp) or not np.allclose(self.y, self.y_tmp) or not np.allclose(self.z, self.z_tmp)) or \
-                   (self.x.shape != self.x_tmp.shape or self.y.shape != self.y_tmp.shape or self.z.shape != self.z_tmp.shape):
-                    print(f'Calculating electric field amplitude of laser {laser.name}...')
-                    E = laser.E(self.x_tmp, self.y_tmp, self.z_tmp)
-                    self.Es[i] = E
+                # Calculate the electric field amplitude of the laser at the position (x,y,z):
+                    # print(f'Calculating electric field amplitude of laser {laser.name}...')
+                E = laser.E(self.x_tmp, self.y_tmp, self.z_tmp)
+                self.Es[i] = E
                 E_squared = np.real(self.Es[i] * np.conj(self.Es[i])) # this is real anyways, just get rid of complex cast warnings
 
                 # Calculate the polarizabilities of the atom in the hfs state for the laser frequency
-                print(f'Calculating polarizability of hfs state {atom.hfs_state} at λ={laser.lambda_}...')
+                # print(f'Calculating polarizability of hfs state {atom.hfs_state} at λ={laser.lambda_}...')
                 alpha_s = atom.scalar_hfs_polarizability(omega_laser=laser.omega)
                 alpha_v = atom.vector_hfs_polarizability(omega_laser=laser.omega)
                 alpha_t = atom.tensor_hfs_polarizability(omega_laser=laser.omega)
@@ -117,7 +115,7 @@ class LaserSetup(object):
         elif unit == u.eV:
             Vs = (Vs * h).to(u.eV)
 
-        return np.squeeze(Vs) # in [h x MHz], [kB x nK] or [eV]. Return as scalar if only one atom and as array if sequence of atoms
+        return np.squeeze(Vs).real # in [h x MHz], [kB x nK] or [eV]. Return as scalar if only one atom and as array if sequence of atoms
 
 
 
@@ -245,32 +243,32 @@ class LaserSetup(object):
 
         if method == 'V':
             # Check x
+            if isinstance(self.x_tmp, u.Quantity) and self.x_tmp.unit.is_equivalent(u.um):
+                self.x_tmp = self.x_tmp.to(u.um).value
             if isinstance(self.x_tmp, (float, int)):
                 self.x_tmp = np.array([self.x_tmp]) * u.um
             elif isinstance(self.x_tmp, (Sequence, np.ndarray)) and not isinstance(self.x_tmp, u.Quantity):
                 self.x_tmp = np.asarray(self.x_tmp) * u.um
-            elif isinstance(self.x_tmp, u.Quantity) and self.x_tmp.unit.is_equivalent(u.um):
-                self.x_tmp = (np.atleast_1d(self.x_tmp.value) * self.x_tmp.unit).to(u.um)
             else:
                 raise TypeError('The x-coordinate must be an astropy.Quantity or float or sequence of floats.')
             
             # Check y
+            if isinstance(self.y_tmp, u.Quantity) and self.y_tmp.unit.is_equivalent(u.um):
+                self.y_tmp = self.y_tmp.to(u.um).value
             if isinstance(self.y_tmp, (float, int)):
                 self.y_tmp = np.array([self.y_tmp]) * u.um
             elif isinstance(self.y_tmp, (Sequence, np.ndarray)) and not isinstance(self.y_tmp, u.Quantity):
                 self.y_tmp = np.asarray(self.y_tmp) * u.um
-            elif isinstance(self.y_tmp, u.Quantity) and self.y_tmp.unit.is_equivalent(u.um):
-                self.y_tmp = (np.atleast_1d(self.y_tmp.value) * self.y_tmp.unit).to(u.um)
             else:
                 raise TypeError('The y-coordinate must be an astropy.Quantity or float or sequence of floats.')
             
             # Check z
+            if isinstance(self.z_tmp, u.Quantity) and self.z_tmp.unit.is_equivalent(u.um):
+                self.z_tmp = self.z_tmp.to(u.um).value
             if isinstance(self.z_tmp, (float, int)):
                 self.z_tmp = np.array([self.z_tmp]) * u.um
             elif isinstance(self.z_tmp, (Sequence, np.ndarray)) and not isinstance(self.z_tmp, u.Quantity):
                 self.z_tmp = np.asarray(self.z_tmp) * u.um
-            elif isinstance(self.z_tmp, u.Quantity) and self.z_tmp.unit.is_equivalent(u.um):
-                self.z_tmp = (np.atleast_1d(self.z_tmp.value) * self.z_tmp.unit).to(u.um)
             else:
                 raise TypeError('The z-coordinate must be an astropy.Quantity or float or sequence of floats.')
             
